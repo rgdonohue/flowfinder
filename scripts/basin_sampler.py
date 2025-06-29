@@ -1,0 +1,823 @@
+#!/usr/bin/env python3
+"""
+FLOWFINDER Accuracy Benchmark - Stratified Basin Sampling
+=========================================================
+
+This module implements stratified sampling of watershed basins for the FLOWFINDER
+accuracy benchmark, focusing on the Mountain West region of the United States.
+
+The sampler creates a representative sample of basins across three dimensions:
+- Size: small (5-20 km²), medium (20-100 km²), large (100-500 km²)
+- Terrain: flat, moderate, steep (based on slope standard deviation)
+- Complexity: low, medium, high (based on stream density)
+
+Key Features:
+- Mountain West state filtering (CO, UT, NM, WY, MT, ID, AZ)
+- Pour point computation with flowline snapping
+- Terrain roughness calculation from DEM data
+- Stream complexity assessment
+- Stratified sampling with configurable samples per stratum
+- Quality validation and export functionality
+
+Author: FLOWFINDER Benchmark Team
+License: MIT
+Version: 1.0.0
+"""
+
+import argparse
+import logging
+import sys
+import warnings
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union, Any
+import yaml
+
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+from shapely.geometry import Point, Polygon
+from shapely.validation import make_valid
+from tqdm import tqdm
+import rasterio
+from rasterio.mask import mask
+from rasterio.warp import calculate_default_transform, reproject, Resampling
+
+# Suppress warnings for cleaner output
+warnings.filterwarnings('ignore', category=UserWarning, module='rasterio')
+warnings.filterwarnings('ignore', category=FutureWarning, module='pandas')
+
+
+class BasinSampler:
+    """
+    Stratified basin sampler for FLOWFINDER accuracy benchmarking.
+    
+    This class handles the complete workflow of loading geospatial datasets,
+    filtering for Mountain West basins, computing terrain and complexity metrics,
+    and performing stratified sampling for benchmark testing.
+    
+    Attributes:
+        config (Dict[str, Any]): Configuration parameters
+        logger (logging.Logger): Logger instance for the sampler
+        huc12 (gpd.GeoDataFrame): HUC12 watershed boundaries
+        flowlines (gpd.GeoDataFrame): NHD+ flowlines for pour point snapping
+        dem (Optional[rasterio.DatasetReader]): DEM raster for terrain analysis
+        sample (pd.DataFrame): Final stratified sample of basins
+        error_logs (List[Dict[str, Any]]): Structured error tracking
+    """
+    
+    def __init__(self, config_path: Optional[str] = None, data_dir: Optional[str] = None) -> None:
+        """
+        Initialize the basin sampler with configuration.
+        
+        Args:
+            config_path: Path to YAML configuration file
+            data_dir: Directory containing input datasets
+            
+        Raises:
+            FileNotFoundError: If configuration file doesn't exist
+            yaml.YAMLError: If configuration file is invalid
+        """
+        self.config = self._load_config(config_path, data_dir)
+        self.error_logs: List[Dict[str, Any]] = []
+        self._setup_logging()
+        self._validate_config()
+        
+        # Initialize data attributes
+        self.huc12: Optional[gpd.GeoDataFrame] = None
+        self.flowlines: Optional[gpd.GeoDataFrame] = None
+        self.dem: Optional[rasterio.DatasetReader] = None
+        self.sample: Optional[pd.DataFrame] = None
+        
+        self.logger.info("BasinSampler initialized successfully")
+    
+    def _load_config(self, config_path: Optional[str], data_dir: Optional[str]) -> Dict[str, Any]:
+        """
+        Load configuration from YAML file or use defaults.
+        
+        Args:
+            config_path: Path to configuration file
+            data_dir: Data directory override
+            
+        Returns:
+            Configuration dictionary
+        """
+        default_config = {
+            'data_dir': data_dir or 'data',
+            'area_range': [5, 500],  # km²
+            'snap_tolerance': 150,  # meters
+            'n_per_stratum': 2,  # samples per stratum
+            'target_crs': 'EPSG:5070',  # Albers Equal Area CONUS
+            'output_crs': 'EPSG:4326',  # WGS84 for export
+            'random_seed': 42,
+            'chunk_size': 1000,  # for memory management
+            'mountain_west_states': ['CO', 'UT', 'NM', 'WY', 'MT', 'ID', 'AZ'],
+            'files': {
+                'huc12': 'huc12.shp',
+                'flowlines': 'nhd_flowlines.shp',
+                'dem': 'dem_10m.tif',
+                'slope': None  # Optional pre-computed slope
+            },
+            'terrain_thresholds': {
+                'flat': 5.0,      # degrees
+                'moderate': 15.0,  # degrees
+                'steep': float('inf')  # degrees
+            },
+            'size_thresholds': {
+                'small': 20,    # km²
+                'medium': 100,  # km²
+                'large': 500    # km²
+            },
+            'quality_checks': {
+                'min_area_km2': 5.0,
+                'max_area_km2': 500.0,
+                'min_lat': 30.0,   # Southern boundary
+                'max_lat': 50.0,   # Northern boundary
+                'min_lon': -120.0, # Western boundary
+                'max_lon': -100.0  # Eastern boundary
+            },
+            'export': {
+                'csv': True,
+                'gpkg': True,
+                'summary': True,
+                'error_log': True
+            }
+        }
+        
+        if config_path and Path(config_path).exists():
+            try:
+                with open(config_path, 'r') as f:
+                    user_config = yaml.safe_load(f)
+                    default_config.update(user_config)
+                self.logger.info(f"Loaded configuration from {config_path}")
+            except yaml.YAMLError as e:
+                raise yaml.YAMLError(f"Invalid YAML configuration: {e}")
+        else:
+            self.logger.info("Using default configuration")
+            
+        return default_config
+    
+    def _setup_logging(self) -> None:
+        """Configure logging for the sampling session."""
+        log_file = f"basin_sampler_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"Logging initialized - log file: {log_file}")
+    
+    def _validate_config(self) -> None:
+        """
+        Validate configuration parameters.
+        
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Validate area range
+        if self.config['area_range'][0] >= self.config['area_range'][1]:
+            raise ValueError("area_range must be [min, max] with min < max")
+        
+        # Validate thresholds
+        if self.config['n_per_stratum'] < 1:
+            raise ValueError("n_per_stratum must be >= 1")
+        
+        if self.config['snap_tolerance'] <= 0:
+            raise ValueError("snap_tolerance must be > 0")
+        
+        # Validate file paths
+        data_dir = Path(self.config['data_dir'])
+        if not data_dir.exists():
+            raise FileNotFoundError(f"Data directory does not exist: {data_dir}")
+        
+        required_files = ['huc12', 'flowlines']
+        for file_key in required_files:
+            file_path = data_dir / self.config['files'][file_key]
+            if not file_path.exists():
+                raise FileNotFoundError(f"Required file not found: {file_path}")
+        
+        self.logger.info("Configuration validation passed")
+    
+    def load_datasets(self) -> None:
+        """
+        Load all required geospatial datasets.
+        
+        Raises:
+            FileNotFoundError: If required files are missing
+            ValueError: If datasets cannot be loaded
+        """
+        self.logger.info("Loading geospatial datasets...")
+        
+        try:
+            # Load HUC12 boundaries
+            self._load_huc12_data()
+            
+            # Load flowlines
+            self._load_flowlines_data()
+            
+            # Load DEM if available
+            self._load_dem_data()
+            
+            self.logger.info("All datasets loaded successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load datasets: {e}")
+            raise
+    
+    def _load_huc12_data(self) -> None:
+        """Load HUC12 watershed boundaries."""
+        huc12_path = Path(self.config['data_dir']) / self.config['files']['huc12']
+        self.logger.info(f"Loading HUC12 boundaries from {huc12_path}")
+        
+        self.huc12 = gpd.read_file(huc12_path)
+        self.huc12 = self.huc12.to_crs(self.config['target_crs'])
+        
+        # Ensure required columns exist
+        required_cols = ['HUC12']
+        missing_cols = [col for col in required_cols if col not in self.huc12.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns in HUC12 data: {missing_cols}")
+        
+        self.logger.info(f"Loaded {len(self.huc12)} HUC12 watersheds")
+    
+    def _load_flowlines_data(self) -> None:
+        """Load NHD+ flowlines for pour point snapping."""
+        flowlines_path = Path(self.config['data_dir']) / self.config['files']['flowlines']
+        self.logger.info(f"Loading flowlines from {flowlines_path}")
+        
+        self.flowlines = gpd.read_file(flowlines_path)
+        self.flowlines = self.flowlines.to_crs(self.config['target_crs'])
+        
+        self.logger.info(f"Loaded {len(self.flowlines)} flowlines")
+    
+    def _load_dem_data(self) -> None:
+        """Load DEM raster for terrain analysis."""
+        dem_path = Path(self.config['data_dir']) / self.config['files']['dem']
+        
+        if dem_path.exists():
+            self.logger.info(f"Loading DEM from {dem_path}")
+            self.dem = rasterio.open(dem_path)
+            self.logger.info(f"DEM loaded: {self.dem.width}x{self.dem.height} pixels")
+        else:
+            self.logger.warning(f"DEM file not found: {dem_path}")
+            self.dem = None
+    
+    def filter_mountain_west_basins(self) -> None:
+        """
+        Filter basins to Mountain West states and apply quality constraints.
+        
+        This method filters the HUC12 dataset to include only basins within
+        the Mountain West region and applies quality constraints for sampling.
+        """
+        if self.huc12 is None:
+            raise ValueError("HUC12 data not loaded. Call load_datasets() first.")
+        
+        self.logger.info("Filtering Mountain West basins...")
+        initial_count = len(self.huc12)
+        
+        # Filter by Mountain West states
+        if 'STATES' in self.huc12.columns:
+            mw_states = self.config['mountain_west_states']
+            self.huc12 = self.huc12[self.huc12['STATES'].isin(mw_states)]
+            self.logger.info(f"State filtering: {len(self.huc12)} basins remaining")
+        
+        # Filter by area constraints
+        self.huc12['area_km2'] = self.huc12.geometry.area / 1e6
+        area_min, area_max = self.config['area_range']
+        self.huc12 = self.huc12[
+            (self.huc12['area_km2'] >= area_min) & 
+            (self.huc12['area_km2'] <= area_max)
+        ]
+        self.logger.info(f"Area filtering: {len(self.huc12)} basins remaining")
+        
+        # Filter by geographic bounds
+        bounds = self.config['quality_checks']
+        self.huc12 = self.huc12[
+            (self.huc12.geometry.bounds.miny >= bounds['min_lat']) &
+            (self.huc12.geometry.bounds.maxy <= bounds['max_lat']) &
+            (self.huc12.geometry.bounds.minx >= bounds['min_lon']) &
+            (self.huc12.geometry.bounds.maxx <= bounds['max_lon'])
+        ]
+        self.logger.info(f"Geographic filtering: {len(self.huc12)} basins remaining")
+        
+        # Remove invalid geometries
+        valid_mask = self.huc12.geometry.is_valid
+        invalid_count = (~valid_mask).sum()
+        if invalid_count > 0:
+            self.logger.warning(f"Removing {invalid_count} invalid geometries")
+            self.huc12 = self.huc12[valid_mask]
+        
+        final_count = len(self.huc12)
+        self.logger.info(f"Mountain West filtering complete: {final_count}/{initial_count} basins retained")
+    
+    def compute_pour_points(self) -> None:
+        """
+        Compute pour points for each basin with flowline snapping.
+        
+        This method calculates the lowest point (pour point) of each basin
+        and snaps it to the nearest flowline within the specified tolerance.
+        """
+        if self.huc12 is None or self.flowlines is None:
+            raise ValueError("HUC12 and flowlines data must be loaded")
+        
+        self.logger.info("Computing pour points with flowline snapping...")
+        
+        pour_points = []
+        snap_tolerance = self.config['snap_tolerance']
+        
+        for idx, basin in tqdm(self.huc12.iterrows(), total=len(self.huc12), desc="Computing pour points"):
+            try:
+                # Find the lowest point of the basin (simplified approach)
+                basin_geom = make_valid(basin.geometry)
+                if basin_geom.is_empty:
+                    continue
+                
+                # Use centroid as initial pour point (simplified)
+                initial_point = basin_geom.centroid
+                
+                # Snap to nearest flowline if within tolerance
+                distances = self.flowlines.geometry.distance(initial_point)
+                min_distance = distances.min()
+                
+                if min_distance <= snap_tolerance:
+                    # Snap to nearest flowline
+                    nearest_idx = distances.idxmin()
+                    nearest_flowline = self.flowlines.loc[nearest_idx].geometry
+                    snapped_point = nearest_flowline.interpolate(nearest_flowline.project(initial_point))
+                    pour_points.append(snapped_point)
+                else:
+                    # Use initial point if no flowline within tolerance
+                    pour_points.append(initial_point)
+                    
+            except Exception as e:
+                self.logger.warning(f"Failed to compute pour point for basin {idx}: {e}")
+                pour_points.append(None)
+        
+        self.huc12['pour_point'] = pour_points
+        valid_points = sum(1 for p in pour_points if p is not None)
+        self.logger.info(f"Pour point computation complete: {valid_points}/{len(pour_points)} valid points")
+    
+    def compute_terrain_roughness(self) -> None:
+        """
+        Compute terrain roughness (slope standard deviation) from DEM data.
+        
+        This method calculates the standard deviation of slope values within
+        each basin to characterize terrain complexity.
+        """
+        if self.huc12 is None:
+            raise ValueError("HUC12 data not loaded")
+        
+        if self.dem is None:
+            self.logger.warning("DEM not available - skipping terrain roughness calculation")
+            self.huc12['slope_std'] = np.nan
+            return
+        
+        self.logger.info("Computing terrain roughness from DEM...")
+        
+        slope_stds = []
+        
+        for idx, basin in tqdm(self.huc12.iterrows(), total=len(self.huc12), desc="Computing terrain roughness"):
+            try:
+                # Extract DEM values for basin
+                basin_geom = [basin.geometry]
+                out_image, out_transform = mask(self.dem, basin_geom, crop=True)
+                
+                if out_image.size == 0:
+                    slope_stds.append(np.nan)
+                    continue
+                
+                # Calculate slope (simplified approach)
+                # In production, use proper slope calculation from elevation
+                elevation_data = out_image[0]
+                valid_mask = elevation_data != self.dem.nodata
+                
+                if valid_mask.sum() < 10:  # Need minimum pixels
+                    slope_stds.append(np.nan)
+                    continue
+                
+                # Simplified slope calculation (gradient magnitude)
+                # In practice, use proper slope calculation
+                slope_std = np.std(elevation_data[valid_mask])
+                slope_stds.append(slope_std)
+                
+            except Exception as e:
+                self.logger.warning(f"Failed to compute terrain roughness for basin {idx}: {e}")
+                slope_stds.append(np.nan)
+        
+        self.huc12['slope_std'] = slope_stds
+        valid_slopes = sum(1 for s in slope_stds if not np.isnan(s))
+        self.logger.info(f"Terrain roughness computation complete: {valid_slopes}/{len(slope_stds)} valid values")
+    
+    def compute_stream_complexity(self) -> None:
+        """
+        Compute stream complexity (stream density) for each basin.
+        
+        This method calculates the density of flowlines within each basin
+        to characterize stream network complexity.
+        """
+        if self.huc12 is None or self.flowlines is None:
+            raise ValueError("HUC12 and flowlines data must be loaded")
+        
+        self.logger.info("Computing stream complexity...")
+        
+        stream_densities = []
+        
+        for idx, basin in tqdm(self.huc12.iterrows(), total=len(self.huc12), desc="Computing stream complexity"):
+            try:
+                basin_geom = make_valid(basin.geometry)
+                if basin_geom.is_empty:
+                    stream_densities.append(0.0)
+                    continue
+                
+                # Find flowlines within basin
+                intersecting_flowlines = self.flowlines[self.flowlines.intersects(basin_geom)]
+                
+                if len(intersecting_flowlines) == 0:
+                    stream_densities.append(0.0)
+                    continue
+                
+                # Calculate total stream length within basin
+                total_length = 0.0
+                for _, flowline in intersecting_flowlines.iterrows():
+                    intersection = flowline.geometry.intersection(basin_geom)
+                    total_length += intersection.length
+                
+                # Calculate stream density (km/km²)
+                basin_area_km2 = basin_geom.area / 1e6
+                stream_density = total_length / 1000 / basin_area_km2  # Convert to km/km²
+                stream_densities.append(stream_density)
+                
+            except Exception as e:
+                self.logger.warning(f"Failed to compute stream complexity for basin {idx}: {e}")
+                stream_densities.append(0.0)
+        
+        self.huc12['stream_density'] = stream_densities
+        self.logger.info(f"Stream complexity computation complete: {len(stream_densities)} basins processed")
+    
+    def classify_basins(self) -> None:
+        """
+        Classify basins into size, terrain, and complexity categories.
+        
+        This method assigns categorical labels to basins based on their
+        computed metrics for stratified sampling.
+        """
+        if self.huc12 is None:
+            raise ValueError("HUC12 data not loaded")
+        
+        self.logger.info("Classifying basins...")
+        
+        # Size classification
+        size_thresholds = self.config['size_thresholds']
+        self.huc12['size_class'] = pd.cut(
+            self.huc12['area_km2'],
+            bins=[0, size_thresholds['small'], size_thresholds['medium'], size_thresholds['large']],
+            labels=['small', 'medium', 'large'],
+            include_lowest=True
+        )
+        
+        # Terrain classification
+        terrain_thresholds = self.config['terrain_thresholds']
+        self.huc12['terrain_class'] = pd.cut(
+            self.huc12['slope_std'],
+            bins=[0, terrain_thresholds['flat'], terrain_thresholds['moderate'], float('inf')],
+            labels=['flat', 'moderate', 'steep'],
+            include_lowest=True
+        )
+        
+        # Complexity classification (tertiles)
+        self.huc12['complexity_score'] = pd.qcut(
+            self.huc12['stream_density'],
+            q=3,
+            labels=[1, 2, 3],
+            duplicates='drop'
+        )
+        
+        self.logger.info("Basin classification complete")
+        self.logger.info(f"Size distribution: {self.huc12['size_class'].value_counts().to_dict()}")
+        self.logger.info(f"Terrain distribution: {self.huc12['terrain_class'].value_counts().to_dict()}")
+        self.logger.info(f"Complexity distribution: {self.huc12['complexity_score'].value_counts().to_dict()}")
+    
+    def stratified_sample(self) -> Dict[str, Any]:
+        """
+        Perform stratified sampling across size, terrain, and complexity dimensions.
+        
+        Returns:
+            Dictionary containing sampling summary and statistics
+            
+        Raises:
+            ValueError: If insufficient basins in any stratum
+        """
+        if self.huc12 is None:
+            raise ValueError("HUC12 data not loaded")
+        
+        self.logger.info("Performing stratified sampling...")
+        
+        # Set random seed for reproducibility
+        np.random.seed(self.config['random_seed'])
+        
+        # Create stratification key
+        self.huc12['stratum'] = (
+            self.huc12['size_class'].astype(str) + '_' +
+            self.huc12['terrain_class'].astype(str) + '_' +
+            self.huc12['complexity_score'].astype(str)
+        )
+        
+        # Sample from each stratum
+        sampled_basins = []
+        stratum_stats = {}
+        
+        for stratum in self.huc12['stratum'].unique():
+            stratum_basins = self.huc12[self.huc12['stratum'] == stratum]
+            n_available = len(stratum_basins)
+            n_requested = self.config['n_per_stratum']
+            
+            if n_available < n_requested:
+                self.logger.warning(f"Stratum {stratum}: {n_available} available, {n_requested} requested")
+                n_sample = n_available
+            else:
+                n_sample = n_requested
+            
+            if n_sample > 0:
+                sampled = stratum_basins.sample(n=n_sample, random_state=self.config['random_seed'])
+                sampled_basins.append(sampled)
+                
+                stratum_stats[stratum] = {
+                    'available': n_available,
+                    'sampled': n_sample,
+                    'basin_ids': sampled['HUC12'].tolist()
+                }
+        
+        if not sampled_basins:
+            raise ValueError("No basins sampled - check stratification criteria")
+        
+        # Combine sampled basins
+        self.sample = pd.concat(sampled_basins, ignore_index=True)
+        
+        # Prepare summary
+        summary = {
+            'total_strata': len(stratum_stats),
+            'total_basins': len(self.sample),
+            'strata': stratum_stats,
+            'sampling_date': datetime.now().isoformat(),
+            'random_seed': self.config['random_seed']
+        }
+        
+        self.logger.info(f"Stratified sampling complete: {len(self.sample)} basins sampled from {len(stratum_stats)} strata")
+        return summary
+    
+    def export_sample(self, output_prefix: str = "basin_sample") -> List[str]:
+        """
+        Export the sampled basins to various formats.
+        
+        Args:
+            output_prefix: Prefix for output files
+            
+        Returns:
+            List of exported file paths
+        """
+        if self.sample is None:
+            raise ValueError("No sample to export. Run stratified_sample() first.")
+        
+        self.logger.info(f"Exporting sample with prefix: {output_prefix}")
+        
+        exported_files = []
+        export_config = self.config['export']
+        
+        # Export CSV
+        if export_config.get('csv', True):
+            csv_path = f"{output_prefix}.csv"
+            self.sample.to_csv(csv_path, index=False)
+            exported_files.append(csv_path)
+            self.logger.info(f"Exported CSV: {csv_path}")
+        
+        # Export GeoPackage
+        if export_config.get('gpkg', True):
+            gpkg_path = f"{output_prefix}.gpkg"
+            sample_gdf = gpd.GeoDataFrame(self.sample, crs=self.config['target_crs'])
+            sample_gdf = sample_gdf.to_crs(self.config['output_crs'])
+            sample_gdf.to_file(gpkg_path, driver='GPKG')
+            exported_files.append(gpkg_path)
+            self.logger.info(f"Exported GeoPackage: {gpkg_path}")
+        
+        # Export summary
+        if export_config.get('summary', True):
+            summary_path = f"{output_prefix}_summary.txt"
+            self._write_summary(summary_path)
+            exported_files.append(summary_path)
+            self.logger.info(f"Exported summary: {summary_path}")
+        
+        # Export error log
+        if export_config.get('error_log', True) and self.error_logs:
+            error_path = f"{output_prefix}_errors.csv"
+            error_df = pd.DataFrame(self.error_logs)
+            error_df.to_csv(error_path, index=False)
+            exported_files.append(error_path)
+            self.logger.info(f"Exported error log: {error_path}")
+        
+        self.logger.info(f"Export complete: {len(exported_files)} files created")
+        return exported_files
+    
+    def _write_summary(self, summary_path: str) -> None:
+        """Write sampling summary to text file."""
+        if self.sample is None:
+            return
+        
+        with open(summary_path, 'w') as f:
+            f.write("FLOWFINDER Basin Sampling Summary\n")
+            f.write("==================================\n\n")
+            f.write(f"Sampling Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Total Basins Sampled: {len(self.sample)}\n")
+            f.write(f"Random Seed: {self.config['random_seed']}\n\n")
+            
+            f.write("Size Distribution:\n")
+            size_counts = self.sample['size_class'].value_counts()
+            for size, count in size_counts.items():
+                f.write(f"  {size}: {count}\n")
+            
+            f.write("\nTerrain Distribution:\n")
+            terrain_counts = self.sample['terrain_class'].value_counts()
+            for terrain, count in terrain_counts.items():
+                f.write(f"  {terrain}: {count}\n")
+            
+            f.write("\nComplexity Distribution:\n")
+            complexity_counts = self.sample['complexity_score'].value_counts()
+            for complexity, count in complexity_counts.items():
+                f.write(f"  {complexity}: {count}\n")
+            
+            f.write(f"\nArea Range: {self.sample['area_km2'].min():.1f} - {self.sample['area_km2'].max():.1f} km²\n")
+            f.write(f"Mean Area: {self.sample['area_km2'].mean():.1f} km²\n")
+    
+    def run_complete_workflow(self, output_prefix: str = "basin_sample") -> Dict[str, Any]:
+        """
+        Run the complete basin sampling workflow.
+        
+        Args:
+            output_prefix: Prefix for output files
+            
+        Returns:
+            Dictionary containing workflow results and exported files
+        """
+        self.logger.info("Starting complete basin sampling workflow...")
+        
+        try:
+            # Load datasets
+            self.load_datasets()
+            
+            # Filter Mountain West basins
+            self.filter_mountain_west_basins()
+            
+            # Compute metrics
+            self.compute_pour_points()
+            self.compute_terrain_roughness()
+            self.compute_stream_complexity()
+            
+            # Classify basins
+            self.classify_basins()
+            
+            # Perform stratified sampling
+            sampling_summary = self.stratified_sample()
+            
+            # Export results
+            exported_files = self.export_sample(output_prefix)
+            
+            workflow_results = {
+                'success': True,
+                'sampling_summary': sampling_summary,
+                'exported_files': exported_files,
+                'error_count': len(self.error_logs)
+            }
+            
+            self.logger.info("Basin sampling workflow completed successfully")
+            return workflow_results
+            
+        except Exception as e:
+            self.logger.error(f"Workflow failed: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'error_count': len(self.error_logs)
+            }
+
+
+def create_sample_config() -> str:
+    """Create a sample configuration file."""
+    sample_config = {
+        'data_dir': 'data',
+        'area_range': [5, 500],
+        'snap_tolerance': 150,
+        'n_per_stratum': 2,
+        'target_crs': 'EPSG:5070',
+        'output_crs': 'EPSG:4326',
+        'random_seed': 42,
+        'mountain_west_states': ['CO', 'UT', 'NM', 'WY', 'MT', 'ID', 'AZ'],
+        'files': {
+            'huc12': 'huc12.shp',
+            'flowlines': 'nhd_flowlines.shp',
+            'dem': 'dem_10m.tif'
+        },
+        'export': {
+            'csv': True,
+            'gpkg': True,
+            'summary': True
+        }
+    }
+    
+    config_content = yaml.dump(sample_config, default_flow_style=False, indent=2)
+    return config_content
+
+
+def main() -> None:
+    """Main CLI entry point for basin sampling."""
+    parser = argparse.ArgumentParser(
+        description="FLOWFINDER Basin Sampler - Stratified sampling for accuracy benchmarking",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run with default configuration
+  python basin_sampler.py --output sample_basins
+  
+  # Run with custom configuration
+  python basin_sampler.py --config config.yaml --output custom_sample
+  
+  # Create sample configuration
+  python basin_sampler.py --create-config > basin_sampler_config.yaml
+  
+  # Run with specific data directory
+  python basin_sampler.py --data-dir /path/to/data --output mountain_west_sample
+        """
+    )
+    
+    parser.add_argument(
+        '--config', '-c',
+        type=str,
+        help='Path to YAML configuration file'
+    )
+    
+    parser.add_argument(
+        '--data-dir', '-d',
+        type=str,
+        help='Directory containing input datasets'
+    )
+    
+    parser.add_argument(
+        '--output', '-o',
+        type=str,
+        default='basin_sample',
+        help='Output file prefix (default: basin_sample)'
+    )
+    
+    parser.add_argument(
+        '--create-config',
+        action='store_true',
+        help='Create sample configuration file and exit'
+    )
+    
+    parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Enable verbose logging'
+    )
+    
+    args = parser.parse_args()
+    
+    # Handle create-config option
+    if args.create_config:
+        print(create_sample_config())
+        return
+    
+    # Set up logging level
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
+    try:
+        # Initialize sampler
+        sampler = BasinSampler(config_path=args.config, data_dir=args.data_dir)
+        
+        # Run complete workflow
+        results = sampler.run_complete_workflow(args.output)
+        
+        if results['success']:
+            print(f"\n✅ Basin sampling completed successfully!")
+            print(f"📊 Sampled {results['sampling_summary']['total_basins']} basins")
+            print(f"📁 Exported {len(results['exported_files'])} files")
+            if results['error_count'] > 0:
+                print(f"⚠️  {results['error_count']} warnings logged")
+        else:
+            print(f"\n❌ Basin sampling failed: {results['error']}")
+            sys.exit(1)
+            
+    except KeyboardInterrupt:
+        print("\n⚠️  Operation cancelled by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Fatal error: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
