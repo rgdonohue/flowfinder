@@ -31,6 +31,7 @@ import warnings
 import gc
 import psutil
 import os
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Any
@@ -93,6 +94,7 @@ class BasinSampler:
         self.dem: Optional[rasterio.DatasetReader] = None
         self.sample: Optional[pd.DataFrame] = None
         self.use_chunked_dem_processing: bool = False
+        self.dem_validation: Optional[Dict[str, Any]] = None
         
         self.logger.info("BasinSampler initialized successfully")
     
@@ -147,6 +149,16 @@ class BasinSampler:
                 'max_lat': 50.0,   # Northern boundary
                 'min_lon': -120.0, # Western boundary
                 'max_lon': -100.0  # Eastern boundary
+            },
+            'dem_validation': {
+                'enable_validation': True,
+                'max_nodata_percent': 80,  # Maximum acceptable NoData percentage
+                'min_elevation_std': 0.1,  # Minimum elevation variation (meters)
+                'expected_resolution_m': 10.0,  # Expected pixel resolution
+                'resolution_tolerance': 0.1,  # Tolerance for resolution check (10%)
+                'elevation_range_min': -500,  # Minimum acceptable elevation (m)
+                'elevation_range_max': 5000,  # Maximum acceptable elevation (m)
+                'fail_on_validation_errors': False  # Whether to stop processing on validation failures
             },
             'export': {
                 'csv': True,
@@ -521,6 +533,415 @@ class BasinSampler:
         
         return is_large
     
+    def _validate_dem_quality(self, dem_path: Path) -> Dict[str, Any]:
+        """
+        Comprehensive DEM quality validation.
+        
+        Args:
+            dem_path: Path to DEM file
+            
+        Returns:
+            Dictionary containing validation results and metrics
+        """
+        validation_results = {
+            'is_valid': True,
+            'errors': [],
+            'warnings': [],
+            'metrics': {},
+            'recommendations': []
+        }
+        
+        try:
+            with rasterio.open(dem_path) as dem:
+                self.logger.info("Performing comprehensive DEM quality validation...")
+                
+                # 1. Basic raster integrity checks
+                self._validate_raster_integrity(dem, validation_results)
+                
+                # 2. Coordinate reference system validation
+                self._validate_dem_crs(dem, validation_results)
+                
+                # 3. Resolution consistency checks
+                self._validate_dem_resolution(dem, validation_results)
+                
+                # 4. NoData extent analysis
+                self._validate_nodata_extent(dem, validation_results)
+                
+                # 5. Elevation value range validation
+                self._validate_elevation_values(dem, validation_results)
+                
+                # 6. Spatial coverage validation
+                self._validate_spatial_coverage(dem, validation_results)
+                
+                # 7. Data type and precision checks
+                self._validate_data_precision(dem, validation_results)
+                
+        except Exception as e:
+            validation_results['is_valid'] = False
+            validation_results['errors'].append(f"DEM validation failed: {e}")
+            self.logger.error(f"DEM validation error: {e}")
+        
+        # Log validation summary
+        self._log_validation_summary(validation_results)
+        
+        return validation_results
+    
+    def _validate_raster_integrity(self, dem: rasterio.DatasetReader, results: Dict[str, Any]) -> None:
+        """Validate basic raster file integrity."""
+        try:
+            # Check basic properties
+            if dem.width <= 0 or dem.height <= 0:
+                results['errors'].append("Invalid raster dimensions")
+                results['is_valid'] = False
+            
+            if dem.count <= 0:
+                results['errors'].append("No raster bands found")
+                results['is_valid'] = False
+            
+            # Check for corrupted transform
+            if dem.transform is None:
+                results['errors'].append("Missing geospatial transform")
+                results['is_valid'] = False
+            
+            # Validate transform values
+            transform = dem.transform
+            if abs(transform.a) < 1e-10 or abs(transform.e) < 1e-10:
+                results['warnings'].append("Extremely small pixel sizes detected")
+            
+            # Store basic metrics
+            results['metrics'].update({
+                'width': dem.width,
+                'height': dem.height,
+                'bands': dem.count,
+                'data_type': str(dem.dtypes[0]),
+                'pixel_size_x': abs(transform.a),
+                'pixel_size_y': abs(transform.e),
+                'total_pixels': dem.width * dem.height
+            })
+            
+        except Exception as e:
+            results['errors'].append(f"Raster integrity check failed: {e}")
+    
+    def _validate_dem_crs(self, dem: rasterio.DatasetReader, results: Dict[str, Any]) -> None:
+        """Validate DEM coordinate reference system."""
+        try:
+            if dem.crs is None:
+                results['errors'].append("DEM has no coordinate reference system defined")
+                results['is_valid'] = False
+                return
+            
+            crs_str = str(dem.crs)
+            results['metrics']['crs'] = crs_str
+            
+            # Check for common problematic CRS
+            if 'EPSG:4326' in crs_str:
+                results['warnings'].append("DEM uses geographic coordinates (EPSG:4326) - "
+                                         "projected coordinates recommended for terrain analysis")
+            
+            # Validate CRS for Mountain West region
+            if dem.bounds:
+                bounds = dem.bounds
+                if 'EPSG:4326' in crs_str:
+                    # Geographic bounds check
+                    if bounds.left < -130 or bounds.right > -90 or bounds.bottom < 25 or bounds.top > 55:
+                        results['warnings'].append("DEM extent appears outside Mountain West region")
+                
+        except Exception as e:
+            results['warnings'].append(f"CRS validation warning: {e}")
+    
+    def _validate_dem_resolution(self, dem: rasterio.DatasetReader, results: Dict[str, Any]) -> None:
+        """Validate DEM resolution consistency and appropriateness."""
+        try:
+            transform = dem.transform
+            pixel_size_x = abs(transform.a)
+            pixel_size_y = abs(transform.e)
+            
+            # Check for square pixels
+            if abs(pixel_size_x - pixel_size_y) > pixel_size_x * 0.01:  # 1% tolerance
+                results['warnings'].append(f"Non-square pixels detected: "
+                                         f"{pixel_size_x:.3f} x {pixel_size_y:.3f}")
+            
+            # Check for expected 10m resolution (within tolerance)
+            expected_resolution = 10.0  # meters for 10m DEM
+            if 'EPSG:4326' not in str(dem.crs):  # Only check for projected coordinates
+                if abs(pixel_size_x - expected_resolution) > expected_resolution * 0.1:  # 10% tolerance
+                    results['warnings'].append(f"Unexpected resolution: {pixel_size_x:.3f}m "
+                                             f"(expected ~{expected_resolution}m)")
+            
+            # Check for extremely high or low resolution
+            if 'EPSG:4326' not in str(dem.crs):
+                if pixel_size_x > 100:
+                    results['warnings'].append(f"Very coarse resolution: {pixel_size_x:.1f}m")
+                elif pixel_size_x < 1:
+                    results['warnings'].append(f"Very fine resolution: {pixel_size_x:.3f}m")
+            
+            results['metrics'].update({
+                'resolution_x': pixel_size_x,
+                'resolution_y': pixel_size_y,
+                'is_square_pixels': abs(pixel_size_x - pixel_size_y) < pixel_size_x * 0.01
+            })
+            
+        except Exception as e:
+            results['warnings'].append(f"Resolution validation warning: {e}")
+    
+    def _validate_nodata_extent(self, dem: rasterio.DatasetReader, results: Dict[str, Any]) -> None:
+        """Validate NoData extent and distribution."""
+        try:
+            # Sample the DEM to check NoData distribution
+            sample_window = rasterio.windows.Window(0, 0, 
+                                                   min(1000, dem.width), 
+                                                   min(1000, dem.height))
+            sample_data = dem.read(1, window=sample_window)
+            
+            # Calculate NoData statistics
+            if dem.nodata is not None:
+                nodata_mask = sample_data == dem.nodata
+                nodata_percent = (nodata_mask.sum() / sample_data.size) * 100
+                
+                results['metrics'].update({
+                    'nodata_value': dem.nodata,
+                    'nodata_percent_sample': nodata_percent,
+                    'has_nodata': True
+                })
+                
+                # Check for excessive NoData
+                if nodata_percent > 80:
+                    results['errors'].append(f"Excessive NoData values: {nodata_percent:.1f}% of sample")
+                    results['is_valid'] = False
+                elif nodata_percent > 50:
+                    results['warnings'].append(f"High NoData percentage: {nodata_percent:.1f}% of sample")
+                elif nodata_percent > 20:
+                    results['warnings'].append(f"Moderate NoData percentage: {nodata_percent:.1f}% of sample")
+                
+                # Check for reasonable NoData value
+                if abs(dem.nodata) < 1e6:  # Reasonable range check
+                    data_min = np.min(sample_data[~nodata_mask]) if not np.all(nodata_mask) else np.nan
+                    data_max = np.max(sample_data[~nodata_mask]) if not np.all(nodata_mask) else np.nan
+                    
+                    if not np.isnan(data_min) and not np.isnan(data_max):
+                        if data_min <= dem.nodata <= data_max:
+                            results['warnings'].append("NoData value within data range - may cause confusion")
+            else:
+                results['metrics'].update({
+                    'nodata_value': None,
+                    'has_nodata': False
+                })
+                results['warnings'].append("No NoData value defined")
+            
+        except Exception as e:
+            results['warnings'].append(f"NoData validation warning: {e}")
+    
+    def _validate_elevation_values(self, dem: rasterio.DatasetReader, results: Dict[str, Any]) -> None:
+        """Validate elevation value ranges and statistics."""
+        try:
+            # Sample elevation data for statistical analysis
+            sample_window = rasterio.windows.Window(0, 0, 
+                                                   min(2000, dem.width), 
+                                                   min(2000, dem.height))
+            sample_data = dem.read(1, window=sample_window)
+            
+            # Remove NoData values
+            if dem.nodata is not None:
+                valid_data = sample_data[sample_data != dem.nodata]
+            else:
+                valid_data = sample_data
+            
+            if len(valid_data) == 0:
+                results['errors'].append("No valid elevation data found in sample")
+                results['is_valid'] = False
+                return
+            
+            # Calculate elevation statistics
+            elev_min = float(np.min(valid_data))
+            elev_max = float(np.max(valid_data))
+            elev_mean = float(np.mean(valid_data))
+            elev_std = float(np.std(valid_data))
+            
+            results['metrics'].update({
+                'elevation_min': elev_min,
+                'elevation_max': elev_max,
+                'elevation_mean': elev_mean,
+                'elevation_std': elev_std,
+                'elevation_range': elev_max - elev_min
+            })
+            
+            # Validate elevation ranges for Mountain West
+            if elev_min < -500:
+                results['warnings'].append(f"Unusually low elevations: {elev_min:.1f}m")
+            if elev_max > 5000:
+                results['warnings'].append(f"Very high elevations: {elev_max:.1f}m")
+            if elev_min > 4000:
+                results['warnings'].append(f"All elevations very high: min={elev_min:.1f}m")
+            
+            # Check for flat areas (no elevation variation)
+            if elev_std < 1.0:
+                results['warnings'].append(f"Very low elevation variation: std={elev_std:.3f}m")
+            
+            # Check for unrealistic elevation ranges
+            if (elev_max - elev_min) > 6000:
+                results['warnings'].append(f"Very large elevation range: {elev_max - elev_min:.1f}m")
+            
+        except Exception as e:
+            results['warnings'].append(f"Elevation validation warning: {e}")
+    
+    def _validate_spatial_coverage(self, dem: rasterio.DatasetReader, results: Dict[str, Any]) -> None:
+        """Validate spatial coverage and extent."""
+        try:
+            bounds = dem.bounds
+            if bounds:
+                # Calculate extent
+                width_extent = bounds.right - bounds.left
+                height_extent = bounds.top - bounds.bottom
+                
+                results['metrics'].update({
+                    'bounds': {
+                        'left': bounds.left,
+                        'bottom': bounds.bottom,
+                        'right': bounds.right,
+                        'top': bounds.top
+                    },
+                    'extent_width': width_extent,
+                    'extent_height': height_extent,
+                    'total_area': width_extent * height_extent
+                })
+                
+                # Check for reasonable extents
+                if 'EPSG:4326' in str(dem.crs):
+                    # Geographic coordinates
+                    if width_extent < 0.001 or height_extent < 0.001:
+                        results['warnings'].append("Very small spatial extent")
+                    elif width_extent > 50 or height_extent > 50:
+                        results['warnings'].append("Very large spatial extent")
+                else:
+                    # Projected coordinates
+                    if width_extent < 1000 or height_extent < 1000:
+                        results['warnings'].append("Very small spatial extent")
+                    elif width_extent > 1000000 or height_extent > 1000000:
+                        results['warnings'].append("Very large spatial extent")
+            
+        except Exception as e:
+            results['warnings'].append(f"Spatial coverage validation warning: {e}")
+    
+    def _validate_data_precision(self, dem: rasterio.DatasetReader, results: Dict[str, Any]) -> None:
+        """Validate data type and precision appropriateness."""
+        try:
+            dtype = dem.dtypes[0]
+            results['metrics']['data_type'] = str(dtype)
+            
+            # Check data type appropriateness
+            if dtype in ['uint8', 'int8']:
+                results['warnings'].append("8-bit data type may have insufficient precision for elevations")
+            elif dtype in ['float64']:
+                results['recommendations'].append("Consider float32 for better memory efficiency")
+            elif dtype in ['uint16', 'int16']:
+                results['recommendations'].append("16-bit integer may be sufficient for most applications")
+            
+            # Check for signed vs unsigned appropriateness
+            if 'uint' in str(dtype):
+                # Sample data to check for negative values that would be problematic
+                sample_window = rasterio.windows.Window(0, 0, min(500, dem.width), min(500, dem.height))
+                sample_data = dem.read(1, window=sample_window)
+                
+                # For unsigned types, check if we're near the maximum value (indicating clipping)
+                max_val = np.iinfo(dtype).max if 'int' in str(dtype) else np.finfo(dtype).max
+                if np.any(sample_data == max_val):
+                    results['warnings'].append("Data values at maximum for data type - possible clipping")
+            
+        except Exception as e:
+            results['warnings'].append(f"Data precision validation warning: {e}")
+    
+    def _log_validation_summary(self, results: Dict[str, Any]) -> None:
+        """Log DEM validation summary."""
+        self.logger.info("=== DEM Quality Validation Summary ===")
+        self.logger.info(f"Overall Status: {'VALID' if results['is_valid'] else 'INVALID'}")
+        
+        if results['errors']:
+            self.logger.error(f"Errors ({len(results['errors'])}):")
+            for error in results['errors']:
+                self.logger.error(f"  - {error}")
+        
+        if results['warnings']:
+            self.logger.warning(f"Warnings ({len(results['warnings'])}):")
+            for warning in results['warnings']:
+                self.logger.warning(f"  - {warning}")
+        
+        if results['recommendations']:
+            self.logger.info(f"Recommendations ({len(results['recommendations'])}):")
+            for rec in results['recommendations']:
+                self.logger.info(f"  - {rec}")
+        
+        # Log key metrics
+        metrics = results.get('metrics', {})
+        if metrics:
+            self.logger.info("Key Metrics:")
+            for key, value in metrics.items():
+                if isinstance(value, dict):
+                    continue  # Skip nested dictionaries for summary
+                if isinstance(value, float):
+                    self.logger.info(f"  {key}: {value:.3f}")
+                else:
+                    self.logger.info(f"  {key}: {value}")
+        
+        self.logger.info("=====================================")
+    
+    def _is_dem_suitable_for_processing(self) -> bool:
+        """
+        Check if DEM passed quality validation for reliable processing.
+        
+        Returns:
+            True if DEM is suitable for processing, False otherwise
+        """
+        if self.dem_validation is None:
+            self.logger.warning("No DEM validation results available")
+            return True  # Assume OK if no validation was run
+        
+        validation = self.dem_validation
+        
+        # Critical validation failures
+        if not validation['is_valid']:
+            return False
+        
+        # Check for deal-breaker conditions
+        metrics = validation.get('metrics', {})
+        
+        # Too much NoData
+        nodata_percent = metrics.get('nodata_percent_sample', 0)
+        if nodata_percent > 80:
+            self.logger.error(f"DEM has too much NoData ({nodata_percent:.1f}%) for reliable processing")
+            return False
+        
+        # No valid elevation data
+        if 'elevation_min' not in metrics or 'elevation_max' not in metrics:
+            self.logger.error("No valid elevation data found in DEM sample")
+            return False
+        
+        # Extremely flat terrain (may indicate corrupt data)
+        elev_std = metrics.get('elevation_std', 0)
+        if elev_std < 0.1:
+            self.logger.warning(f"DEM appears extremely flat (std={elev_std:.3f}m) - results may be unreliable")
+        
+        return True
+    
+    def export_dem_validation_report(self, output_file: str = "dem_validation_report.json") -> None:
+        """
+        Export DEM validation results to a file.
+        
+        Args:
+            output_file: Path to output file for validation report
+        """
+        if self.dem_validation is None:
+            self.logger.warning("No DEM validation results to export")
+            return
+        
+        try:
+            with open(output_file, 'w') as f:
+                json.dump(self.dem_validation, f, indent=2, default=str)
+            
+            self.logger.info(f"DEM validation report exported to: {output_file}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to export DEM validation report: {e}")
+    
     def _extract_dem_data_for_basin(self, basin_geometry, basin_id: str = "unknown") -> Optional[np.ndarray]:
         """
         Extract DEM data for a single basin with memory management.
@@ -772,6 +1193,22 @@ class BasinSampler:
                            f"{dem_info['bands']} bands, {dem_info['dtype']}, "
                            f"CRS: {dem_info['crs']}, Size: {file_size_mb:.1f} MB")
             
+            # Perform comprehensive DEM quality validation
+            validation_results = self._validate_dem_quality(dem_path)
+            
+            # Store validation results for later reference
+            self.dem_validation = validation_results
+            
+            # Handle validation failures
+            if not validation_results['is_valid']:
+                self.logger.error("DEM validation failed - some processing may be unreliable")
+                if len(validation_results['errors']) > 3:  # Too many critical errors
+                    self.logger.error("Too many critical DEM errors - consider using a different DEM")
+                    self.dem.close()
+                    self.dem = None
+                    self.use_chunked_dem_processing = False
+                    return
+            
             # Check if this is a large file that will need chunked processing
             self.use_chunked_dem_processing = self._is_large_dem_file(dem_path)
             
@@ -897,6 +1334,12 @@ class BasinSampler:
         
         if self.dem is None:
             self.logger.warning("DEM not available - skipping terrain roughness calculation")
+            self.huc12['slope_std'] = np.nan
+            return
+        
+        # Check DEM quality before processing
+        if not self._is_dem_suitable_for_processing():
+            self.logger.error("DEM failed quality validation - skipping terrain roughness calculation")
             self.huc12['slope_std'] = np.nan
             return
         
