@@ -40,10 +40,18 @@ import yaml
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from shapely.geometry import Point, Polygon
-from shapely.validation import make_valid
+from shapely.geometry import Point, Polygon, MultiPolygon, LineString, MultiLineString
+from shapely.validation import make_valid, explain_validity
+from shapely.ops import unary_union
 from tqdm import tqdm
 import rasterio
+
+# Import shared geometry utilities
+try:
+    from .geometry_utils import GeometryDiagnostics
+except ImportError:
+    # Fallback for when running as script
+    from geometry_utils import GeometryDiagnostics
 from rasterio.mask import mask
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.windows import Window
@@ -94,7 +102,14 @@ class BasinSampler:
         self.dem: Optional[rasterio.DatasetReader] = None
         self.sample: Optional[pd.DataFrame] = None
         self.use_chunked_dem_processing: bool = False
+        
+        # Validation results storage
         self.dem_validation: Optional[Dict[str, Any]] = None
+        self.huc12_validation: Optional[Dict[str, Any]] = None
+        self.flowlines_validation: Optional[Dict[str, Any]] = None
+        
+        # Initialize geometry diagnostics
+        self.geometry_diagnostics = GeometryDiagnostics(logger=self.logger, config=self.config)
         
         self.logger.info("BasinSampler initialized successfully")
     
@@ -159,6 +174,59 @@ class BasinSampler:
                 'elevation_range_min': -500,  # Minimum acceptable elevation (m)
                 'elevation_range_max': 5000,  # Maximum acceptable elevation (m)
                 'fail_on_validation_errors': False  # Whether to stop processing on validation failures
+            },
+            'geometry_repair': {
+                'enable_diagnostics': True,  # Enable detailed geometry diagnostics
+                'enable_repair_attempts': True,  # Enable automatic repair attempts
+                'invalid_geometry_action': 'remove',  # 'remove', 'keep', 'convert_to_point'
+                'max_repair_attempts': 3,  # Maximum repair attempts per geometry
+                'detailed_logging': True,  # Enable detailed repair logging
+                'repair_strategies': {
+                    'buffer_fix': True,  # Use buffer(0) to fix self-intersections
+                    'simplify': True,  # Use simplify() for duplicate points
+                    'make_valid': True,  # Use make_valid() as fallback
+                    'convex_hull': False,  # Use convex hull (changes geometry significantly)
+                    'orient_fix': True,  # Fix orientation issues
+                    'simplify_holes': True  # Remove problematic holes
+                }
+            },
+            'shapefile_schemas': {
+                'huc12': {
+                    'required_columns': ['HUC12'],
+                    'column_types': {
+                        'HUC12': 'string',
+                        'NAME': 'string',
+                        'STATES': 'string',
+                        'AREASQKM': 'float'
+                    },
+                    'not_null_columns': ['HUC12'],
+                    'geometry_type': 'Polygon',
+                    'value_ranges': {
+                        'HUC12': {'string_length': 12},
+                        'AREASQKM': {'min': 0.01, 'max': 10000}
+                    },
+                    'consistency_rules': {
+                        'unique_values': {'columns': ['HUC12']},
+                        'area_calculation': {'area_column': 'AREASQKM'}
+                    }
+                },
+                'flowlines': {
+                    'required_columns': ['COMID'],
+                    'column_types': {
+                        'COMID': 'integer',
+                        'GNIS_NAME': 'string',
+                        'LENGTHKM': 'float'
+                    },
+                    'not_null_columns': ['COMID'],
+                    'geometry_type': 'LineString',
+                    'value_ranges': {
+                        'COMID': {'min': 1},
+                        'LENGTHKM': {'min': 0.001, 'max': 1000}
+                    },
+                    'consistency_rules': {
+                        'unique_values': {'columns': ['COMID']}
+                    }
+                }
             },
             'export': {
                 'csv': True,
@@ -942,6 +1010,353 @@ class BasinSampler:
         except Exception as e:
             self.logger.error(f"Failed to export DEM validation report: {e}")
     
+    def _validate_shapefile_schema(self, gdf: gpd.GeoDataFrame, schema_config: Dict[str, Any], 
+                                 file_description: str) -> Dict[str, Any]:
+        """
+        Comprehensive shapefile schema validation.
+        
+        Args:
+            gdf: GeoDataFrame to validate
+            schema_config: Expected schema configuration
+            file_description: Description of the file for logging
+            
+        Returns:
+            Dictionary containing validation results
+        """
+        validation_results = {
+            'is_valid': True,
+            'errors': [],
+            'warnings': [],
+            'metrics': {},
+            'recommendations': []
+        }
+        
+        try:
+            self.logger.info(f"Validating schema for {file_description}...")
+            
+            # 1. Required columns validation
+            self._validate_required_columns(gdf, schema_config, validation_results)
+            
+            # 2. Data type validation
+            self._validate_column_data_types(gdf, schema_config, validation_results)
+            
+            # 3. Value range validation
+            self._validate_column_value_ranges(gdf, schema_config, validation_results)
+            
+            # 4. Null values validation
+            self._validate_null_values(gdf, schema_config, validation_results)
+            
+            # 5. Geometry validation
+            self._validate_shapefile_geometry(gdf, schema_config, validation_results)
+            
+            # 6. Data consistency checks
+            self._validate_data_consistency(gdf, schema_config, validation_results)
+            
+            # Store basic metrics
+            validation_results['metrics'].update({
+                'total_features': len(gdf),
+                'total_columns': len(gdf.columns),
+                'geometry_type': str(gdf.geom_type.iloc[0]) if len(gdf) > 0 else 'unknown',
+                'has_crs': gdf.crs is not None,
+                'crs': str(gdf.crs) if gdf.crs else None
+            })
+            
+        except Exception as e:
+            validation_results['is_valid'] = False
+            validation_results['errors'].append(f"Schema validation failed: {e}")
+            self.logger.error(f"Schema validation error for {file_description}: {e}")
+        
+        # Log validation summary
+        self._log_schema_validation_summary(validation_results, file_description)
+        
+        return validation_results
+    
+    def _validate_required_columns(self, gdf: gpd.GeoDataFrame, schema_config: Dict[str, Any], 
+                                 results: Dict[str, Any]) -> None:
+        """Validate that all required columns are present."""
+        required_columns = schema_config.get('required_columns', [])
+        
+        missing_columns = []
+        for col_name in required_columns:
+            if col_name not in gdf.columns:
+                missing_columns.append(col_name)
+        
+        if missing_columns:
+            results['errors'].append(f"Missing required columns: {missing_columns}")
+            results['is_valid'] = False
+        
+        # Check for empty column names
+        empty_cols = [col for col in gdf.columns if not col or col.strip() == '']
+        if empty_cols:
+            results['warnings'].append(f"Found {len(empty_cols)} columns with empty names")
+        
+        results['metrics']['missing_required_columns'] = missing_columns
+        results['metrics']['available_columns'] = list(gdf.columns)
+    
+    def _validate_column_data_types(self, gdf: gpd.GeoDataFrame, schema_config: Dict[str, Any], 
+                                   results: Dict[str, Any]) -> None:
+        """Validate column data types match expectations."""
+        expected_types = schema_config.get('column_types', {})
+        type_issues = []
+        
+        for col_name, expected_type in expected_types.items():
+            if col_name not in gdf.columns:
+                continue  # Already handled in required columns check
+            
+            actual_dtype = str(gdf[col_name].dtype)
+            
+            # Map pandas dtypes to expected types
+            if not self._is_compatible_dtype(actual_dtype, expected_type):
+                type_issues.append(f"{col_name}: expected {expected_type}, got {actual_dtype}")
+        
+        if type_issues:
+            results['warnings'].append(f"Data type mismatches: {type_issues}")
+        
+        # Check for object columns that might need specific handling
+        object_cols = [col for col in gdf.columns if gdf[col].dtype == 'object']
+        if object_cols:
+            results['metrics']['object_columns'] = object_cols
+            if len(object_cols) > len(gdf.columns) / 2:
+                results['warnings'].append("More than half of columns are object type - consider data type optimization")
+    
+    def _is_compatible_dtype(self, actual_dtype: str, expected_type: str) -> bool:
+        """Check if actual data type is compatible with expected type."""
+        # Define compatibility mappings
+        compatibility_map = {
+            'string': ['object', 'string'],
+            'text': ['object', 'string'],
+            'integer': ['int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64'],
+            'float': ['float16', 'float32', 'float64'],
+            'numeric': ['int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64', 
+                       'float16', 'float32', 'float64'],
+            'boolean': ['bool'],
+            'datetime': ['datetime64']
+        }
+        
+        expected_type_lower = expected_type.lower()
+        compatible_types = compatibility_map.get(expected_type_lower, [expected_type_lower])
+        
+        return any(compatible_type in actual_dtype.lower() for compatible_type in compatible_types)
+    
+    def _validate_column_value_ranges(self, gdf: gpd.GeoDataFrame, schema_config: Dict[str, Any], 
+                                    results: Dict[str, Any]) -> None:
+        """Validate column values are within expected ranges."""
+        value_ranges = schema_config.get('value_ranges', {})
+        range_issues = []
+        
+        for col_name, range_config in value_ranges.items():
+            if col_name not in gdf.columns:
+                continue
+            
+            col_data = gdf[col_name]
+            
+            # Skip validation for non-numeric columns unless specifically configured
+            if not pd.api.types.is_numeric_dtype(col_data) and 'string_length' not in range_config:
+                continue
+            
+            # Numeric range validation
+            if 'min' in range_config and pd.api.types.is_numeric_dtype(col_data):
+                min_val = col_data.min()
+                if min_val < range_config['min']:
+                    range_issues.append(f"{col_name}: minimum value {min_val} below expected {range_config['min']}")
+            
+            if 'max' in range_config and pd.api.types.is_numeric_dtype(col_data):
+                max_val = col_data.max()
+                if max_val > range_config['max']:
+                    range_issues.append(f"{col_name}: maximum value {max_val} above expected {range_config['max']}")
+            
+            # String length validation
+            if 'string_length' in range_config and col_data.dtype == 'object':
+                max_length = col_data.astype(str).str.len().max()
+                expected_length = range_config['string_length']
+                if max_length > expected_length:
+                    range_issues.append(f"{col_name}: maximum string length {max_length} exceeds expected {expected_length}")
+        
+        if range_issues:
+            results['warnings'].append(f"Value range issues: {range_issues}")
+    
+    def _validate_null_values(self, gdf: gpd.GeoDataFrame, schema_config: Dict[str, Any], 
+                            results: Dict[str, Any]) -> None:
+        """Validate null value constraints."""
+        not_null_columns = schema_config.get('not_null_columns', [])
+        null_issues = []
+        
+        for col_name in not_null_columns:
+            if col_name not in gdf.columns:
+                continue
+            
+            null_count = gdf[col_name].isnull().sum()
+            if null_count > 0:
+                null_percentage = (null_count / len(gdf)) * 100
+                null_issues.append(f"{col_name}: {null_count} null values ({null_percentage:.1f}%)")
+        
+        if null_issues:
+            results['errors'].append(f"Null value violations: {null_issues}")
+            results['is_valid'] = False
+        
+        # Check for columns with excessive null values
+        high_null_threshold = schema_config.get('max_null_percentage', 50)
+        high_null_columns = []
+        
+        for col in gdf.columns:
+            if col == 'geometry':
+                continue
+            null_percentage = (gdf[col].isnull().sum() / len(gdf)) * 100
+            if null_percentage > high_null_threshold:
+                high_null_columns.append(f"{col}: {null_percentage:.1f}%")
+        
+        if high_null_columns:
+            results['warnings'].append(f"Columns with high null percentages: {high_null_columns}")
+    
+    def _validate_shapefile_geometry(self, gdf: gpd.GeoDataFrame, schema_config: Dict[str, Any], 
+                                   results: Dict[str, Any]) -> None:
+        """Validate geometry column and spatial properties."""
+        expected_geom_type = schema_config.get('geometry_type')
+        
+        if len(gdf) == 0:
+            results['errors'].append("Shapefile contains no features")
+            results['is_valid'] = False
+            return
+        
+        # Enhanced geometry validity checking with detailed diagnostics
+        geometry_config = self.config.get('geometry_repair', {})
+        
+        if geometry_config.get('enable_diagnostics', True):
+            # Use enhanced geometry analysis
+            geometry_stats = self.geometry_diagnostics.analyze_geometry_issues(gdf, "shapefile validation")
+            
+            # Log detailed diagnostics
+            if geometry_stats['total_invalid'] > 0:
+                invalid_percentage = (geometry_stats['total_invalid'] / geometry_stats['total_features']) * 100
+                
+                # Add issue type breakdown to results
+                if geometry_stats['issue_types']:
+                    issue_summary = ", ".join([f"{issue}: {count}" for issue, count in geometry_stats['issue_types'].items()])
+                    results['warnings'].append(f"Geometry issue types: {issue_summary}")
+                
+                # Store detailed diagnostics in results
+                results['metrics']['geometry_diagnostics'] = {
+                    'invalid_count': geometry_stats['total_invalid'],
+                    'issue_types': geometry_stats['issue_types'],
+                    'geometry_types': geometry_stats['geometry_types'],
+                    'critical_errors': len(geometry_stats['critical_errors'])
+                }
+                
+                if invalid_percentage > 10:  # More than 10% invalid
+                    results['errors'].append(f"High percentage of invalid geometries: {geometry_stats['total_invalid']} ({invalid_percentage:.1f}%)")
+                    results['is_valid'] = False
+                else:
+                    results['warnings'].append(f"Some invalid geometries found: {geometry_stats['total_invalid']} ({invalid_percentage:.1f}%)")
+        else:
+            # Basic geometry validation (backward compatibility)
+            invalid_geoms = ~gdf.is_valid
+            invalid_count = invalid_geoms.sum()
+            
+            if invalid_count > 0:
+                invalid_percentage = (invalid_count / len(gdf)) * 100
+                if invalid_percentage > 10:  # More than 10% invalid
+                    results['errors'].append(f"High percentage of invalid geometries: {invalid_count} ({invalid_percentage:.1f}%)")
+                    results['is_valid'] = False
+                else:
+                    results['warnings'].append(f"Some invalid geometries found: {invalid_count} ({invalid_percentage:.1f}%)")
+        
+        # Check geometry type consistency
+        if expected_geom_type:
+            actual_geom_types = gdf.geom_type.unique()
+            if len(actual_geom_types) > 1:
+                results['warnings'].append(f"Mixed geometry types found: {list(actual_geom_types)}")
+            elif actual_geom_types[0] != expected_geom_type:
+                results['warnings'].append(f"Unexpected geometry type: {actual_geom_types[0]}, expected {expected_geom_type}")
+        
+        # Check for empty geometries
+        empty_geoms = gdf.is_empty.sum()
+        if empty_geoms > 0:
+            empty_percentage = (empty_geoms / len(gdf)) * 100
+            if empty_percentage > 5:  # More than 5% empty
+                results['errors'].append(f"High percentage of empty geometries: {empty_geoms} ({empty_percentage:.1f}%)")
+                results['is_valid'] = False
+            else:
+                results['warnings'].append(f"Some empty geometries found: {empty_geoms} ({empty_percentage:.1f}%)")
+        
+        results['metrics'].update({
+            'invalid_geometries': invalid_count,
+            'empty_geometries': empty_geoms,
+            'geometry_types': list(gdf.geom_type.unique())
+        })
+    
+    def _validate_data_consistency(self, gdf: gpd.GeoDataFrame, schema_config: Dict[str, Any], 
+                                 results: Dict[str, Any]) -> None:
+        """Validate data consistency and business logic rules."""
+        consistency_rules = schema_config.get('consistency_rules', {})
+        
+        for rule_name, rule_config in consistency_rules.items():
+            try:
+                if rule_name == 'unique_values':
+                    # Check for duplicate values in specified columns
+                    for col_name in rule_config.get('columns', []):
+                        if col_name in gdf.columns:
+                            duplicates = gdf[col_name].duplicated().sum()
+                            if duplicates > 0:
+                                results['warnings'].append(f"{col_name}: {duplicates} duplicate values found")
+                
+                elif rule_name == 'value_set':
+                    # Check if column values are within expected set
+                    for col_name, expected_values in rule_config.items():
+                        if col_name in gdf.columns:
+                            unexpected_values = set(gdf[col_name].unique()) - set(expected_values)
+                            if unexpected_values:
+                                results['warnings'].append(f"{col_name}: unexpected values {list(unexpected_values)}")
+                
+                elif rule_name == 'area_calculation':
+                    # Validate area calculations if present
+                    if 'area_column' in rule_config and rule_config['area_column'] in gdf.columns:
+                        area_col = rule_config['area_column']
+                        # Calculate actual areas and compare
+                        actual_areas = gdf.geometry.area / 1e6  # Convert to km²
+                        reported_areas = gdf[area_col]
+                        
+                        # Check for significant discrepancies (>10% difference)
+                        area_diff = abs(actual_areas - reported_areas) / actual_areas * 100
+                        high_diff_count = (area_diff > 10).sum()
+                        
+                        if high_diff_count > 0:
+                            results['warnings'].append(f"Area discrepancies in {high_diff_count} features (>10% difference)")
+                
+            except Exception as e:
+                results['warnings'].append(f"Consistency rule '{rule_name}' failed: {e}")
+    
+    def _log_schema_validation_summary(self, results: Dict[str, Any], file_description: str) -> None:
+        """Log shapefile schema validation summary."""
+        self.logger.info(f"=== Schema Validation Summary: {file_description} ===")
+        self.logger.info(f"Overall Status: {'VALID' if results['is_valid'] else 'INVALID'}")
+        
+        if results['errors']:
+            self.logger.error(f"Errors ({len(results['errors'])}):")
+            for error in results['errors']:
+                self.logger.error(f"  - {error}")
+        
+        if results['warnings']:
+            self.logger.warning(f"Warnings ({len(results['warnings'])}):")
+            for warning in results['warnings']:
+                self.logger.warning(f"  - {warning}")
+        
+        if results['recommendations']:
+            self.logger.info(f"Recommendations ({len(results['recommendations'])}):")
+            for rec in results['recommendations']:
+                self.logger.info(f"  - {rec}")
+        
+        # Log key metrics
+        metrics = results.get('metrics', {})
+        if metrics:
+            self.logger.info("Key Metrics:")
+            for key, value in metrics.items():
+                if isinstance(value, (list, dict)) and len(str(value)) > 100:
+                    self.logger.info(f"  {key}: <{len(value)} items>")
+                else:
+                    self.logger.info(f"  {key}: {value}")
+        
+        self.logger.info("=" * (len(file_description) + 35))
+    
     def _extract_dem_data_for_basin(self, basin_geometry, basin_id: str = "unknown") -> Optional[np.ndarray]:
         """
         Extract DEM data for a single basin with memory management.
@@ -1145,13 +1560,28 @@ class BasinSampler:
         self.logger.info(f"Loading HUC12 boundaries from {huc12_path}")
         
         self.huc12 = gpd.read_file(huc12_path)
-        self.huc12 = self._validate_crs_transformation(self.huc12, "HUC12 boundaries", self.config['target_crs'])
         
-        # Ensure required columns exist
-        required_cols = ['HUC12']
-        missing_cols = [col for col in required_cols if col not in self.huc12.columns]
-        if missing_cols:
-            raise ValueError(f"Missing required columns in HUC12 data: {missing_cols}")
+        # Perform geometry diagnostics and repair
+        geometry_config = self.config.get('geometry_repair', {})
+        if geometry_config.get('enable_diagnostics', True) or geometry_config.get('enable_repair_attempts', True):
+            self.huc12 = self.geometry_diagnostics.diagnose_and_repair_geometries(self.huc12, "HUC12 boundaries")
+        
+        # Perform schema validation after geometry repair
+        schema_config = self.config.get('shapefile_schemas', {}).get('huc12', {})
+        if schema_config:
+            validation_results = self._validate_shapefile_schema(self.huc12, schema_config, "HUC12 boundaries")
+            
+            # Store validation results
+            self.huc12_validation = validation_results
+            
+            # Handle validation failures
+            if not validation_results['is_valid']:
+                if self.config.get('dem_validation', {}).get('fail_on_validation_errors', False):
+                    raise ValueError("HUC12 shapefile failed schema validation")
+                else:
+                    self.logger.warning("HUC12 shapefile validation failed - proceeding with caution")
+        
+        self.huc12 = self._validate_crs_transformation(self.huc12, "HUC12 boundaries", self.config['target_crs'])
         
         self.logger.info(f"Loaded {len(self.huc12)} HUC12 watersheds")
     
@@ -1161,6 +1591,27 @@ class BasinSampler:
         self.logger.info(f"Loading flowlines from {flowlines_path}")
         
         self.flowlines = gpd.read_file(flowlines_path)
+        
+        # Perform geometry diagnostics and repair
+        geometry_config = self.config.get('geometry_repair', {})
+        if geometry_config.get('enable_diagnostics', True) or geometry_config.get('enable_repair_attempts', True):
+            self.flowlines = self.geometry_diagnostics.diagnose_and_repair_geometries(self.flowlines, "NHD+ flowlines")
+        
+        # Perform schema validation after geometry repair
+        schema_config = self.config.get('shapefile_schemas', {}).get('flowlines', {})
+        if schema_config:
+            validation_results = self._validate_shapefile_schema(self.flowlines, schema_config, "NHD+ flowlines")
+            
+            # Store validation results
+            self.flowlines_validation = validation_results
+            
+            # Handle validation failures
+            if not validation_results['is_valid']:
+                if self.config.get('dem_validation', {}).get('fail_on_validation_errors', False):
+                    raise ValueError("Flowlines shapefile failed schema validation")
+                else:
+                    self.logger.warning("Flowlines shapefile validation failed - proceeding with caution")
+        
         self.flowlines = self._validate_crs_transformation(self.flowlines, "NHD+ flowlines", self.config['target_crs'])
         
         self.logger.info(f"Loaded {len(self.flowlines)} flowlines")

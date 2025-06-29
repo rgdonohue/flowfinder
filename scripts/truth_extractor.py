@@ -37,9 +37,13 @@ import yaml
 import pandas as pd
 import geopandas as gpd
 import numpy as np
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon, MultiPolygon, LineString, MultiLineString
 from shapely.validation import explain_validity, make_valid
+from shapely.ops import unary_union
 from tqdm import tqdm
+
+# Import shared geometry utilities
+from .geometry_utils import GeometryDiagnostics
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore', category=UserWarning, module='geopandas')
@@ -87,6 +91,9 @@ class TruthExtractor:
         self.flowlines: Optional[gpd.GeoDataFrame] = None
         self.truth_polygons: Optional[gpd.GeoDataFrame] = None
         
+        # Initialize geometry diagnostics
+        self.geometry_diagnostics = GeometryDiagnostics(logger=self.logger, config=self.config)
+        
         self.logger.info("TruthExtractor initialized successfully")
     
     def _load_config(self, config_path: Optional[str], data_dir: Optional[str]) -> Dict[str, Any]:
@@ -117,7 +124,23 @@ class TruthExtractor:
                 'max_memory_mb': 2048,  # Maximum memory usage in MB
                 'large_file_threshold_mb': 50,  # Files larger than this get special handling
                 'gc_frequency': 50,  # Garbage collection frequency (every N extractions)
-                'monitor_memory': True  # Enable memory monitoring
+                'monitor_memory': True,  # Enable memory monitoring
+                'fail_on_validation_errors': False  # Whether to fail on validation errors
+            },
+            'geometry_repair': {
+                'enable_diagnostics': True,  # Enable detailed geometry diagnostics
+                'enable_repair_attempts': True,  # Enable automatic repair attempts
+                'invalid_geometry_action': 'remove',  # 'remove', 'keep', 'convert_to_point'
+                'max_repair_attempts': 3,  # Maximum repair attempts per geometry
+                'detailed_logging': True,  # Enable detailed repair logging
+                'repair_strategies': {
+                    'buffer_fix': True,  # Use buffer(0) to fix self-intersections
+                    'simplify': True,  # Use simplify() for duplicate points
+                    'make_valid': True,  # Use make_valid() as fallback
+                    'convex_hull': False,  # Use convex hull (changes geometry significantly)
+                    'orient_fix': True,  # Fix orientation issues
+                    'simplify_holes': True  # Remove problematic holes
+                }
             },
             'shapefile_schemas': {
                 'basin_sample': {
@@ -457,14 +480,21 @@ class TruthExtractor:
     
     def _fallback_geometry_validation(self, gdf: gpd.GeoDataFrame, target_crs: str, 
                                     source_description: str) -> Optional[gpd.GeoDataFrame]:
-        """Fallback: Fix invalid geometries before transformation."""
+        """Fallback: Fix invalid geometries before transformation using enhanced diagnostics."""
         try:
             gdf_copy = gdf.copy()
-            # Fix invalid geometries
-            invalid_mask = ~gdf_copy.is_valid
-            if invalid_mask.any():
-                self.logger.info(f"Fixing {invalid_mask.sum()} invalid geometries in {source_description}")
-                gdf_copy.loc[invalid_mask, 'geometry'] = gdf_copy.loc[invalid_mask, 'geometry'].apply(make_valid)
+            
+            # Use enhanced geometry diagnostics if enabled
+            geometry_config = self.config.get('geometry_repair', {})
+            if geometry_config.get('enable_diagnostics', True):
+                self.logger.info(f"Applying enhanced geometry repair for {source_description} before CRS transformation")
+                gdf_copy = self.geometry_diagnostics.diagnose_and_repair_geometries(gdf_copy, f"{source_description} (CRS fallback)")
+            else:
+                # Basic geometry fix (backward compatibility)
+                invalid_mask = ~gdf_copy.is_valid
+                if invalid_mask.any():
+                    self.logger.info(f"Fixing {invalid_mask.sum()} invalid geometries in {source_description}")
+                    gdf_copy.loc[invalid_mask, 'geometry'] = gdf_copy.loc[invalid_mask, 'geometry'].apply(make_valid)
             
             return gdf_copy.to_crs(target_crs)
         except Exception:
@@ -627,17 +657,45 @@ class TruthExtractor:
             self.logger.error(f"NHD+ catchments missing required columns: {missing_cols}")
             validation_passed = False
         
-        # Check geometry validity
+        # Enhanced geometry validity checking with detailed diagnostics
         if len(gdf) > 0:
-            invalid_geoms = ~gdf.is_valid
-            invalid_count = invalid_geoms.sum()
-            if invalid_count > 0:
-                invalid_percentage = (invalid_count / len(gdf)) * 100
-                if invalid_percentage > 10:
-                    self.logger.error(f"NHD+ catchments has high percentage of invalid geometries: {invalid_percentage:.1f}%")
-                    validation_passed = False
-                else:
-                    self.logger.warning(f"NHD+ catchments has some invalid geometries: {invalid_count} ({invalid_percentage:.1f}%)")
+            geometry_config = self.config.get('geometry_repair', {})
+            
+            if geometry_config.get('enable_diagnostics', True):
+                # Use enhanced geometry analysis
+                geometry_stats = self.geometry_diagnostics.analyze_geometry_issues(gdf, "NHD+ catchments validation")
+                
+                # Log detailed diagnostics
+                self.logger.info(f"NHD+ catchments geometry analysis: {geometry_stats['total_invalid']}/{geometry_stats['total_features']} invalid")
+                
+                if geometry_stats['total_invalid'] > 0:
+                    invalid_percentage = (geometry_stats['total_invalid'] / geometry_stats['total_features']) * 100
+                    
+                    # Log issue type breakdown
+                    if geometry_stats['issue_types']:
+                        issue_summary = ", ".join([f"{issue}: {count}" for issue, count in geometry_stats['issue_types'].items()])
+                        self.logger.info(f"Issue types: {issue_summary}")
+                    
+                    # Log detailed diagnostics for first few invalid geometries
+                    for diagnostic in geometry_stats['detailed_diagnostics'][:3]:
+                        self.logger.warning(f"Invalid geometry {diagnostic['index']}: {diagnostic['explanation']}")
+                    
+                    if invalid_percentage > 10:
+                        self.logger.error(f"NHD+ catchments has high percentage of invalid geometries: {invalid_percentage:.1f}%")
+                        validation_passed = False
+                    else:
+                        self.logger.warning(f"NHD+ catchments has some invalid geometries: {geometry_stats['total_invalid']} ({invalid_percentage:.1f}%)")
+            else:
+                # Basic geometry validation (backward compatibility)
+                invalid_geoms = ~gdf.is_valid
+                invalid_count = invalid_geoms.sum()
+                if invalid_count > 0:
+                    invalid_percentage = (invalid_count / len(gdf)) * 100
+                    if invalid_percentage > 10:
+                        self.logger.error(f"NHD+ catchments has high percentage of invalid geometries: {invalid_percentage:.1f}%")
+                        validation_passed = False
+                    else:
+                        self.logger.warning(f"NHD+ catchments has some invalid geometries: {invalid_count} ({invalid_percentage:.1f}%)")
         
         # Check for duplicate FEATUREID values
         if 'FEATUREID' in gdf.columns:
@@ -704,6 +762,7 @@ class TruthExtractor:
         
         self.logger.info(f"NHD+ flowlines schema validation: {'PASSED' if validation_passed else 'FAILED'}")
         return validation_passed
+    
     
     def load_datasets(self) -> None:
         """
@@ -776,6 +835,11 @@ class TruthExtractor:
             self.catchments = gpd.read_file(catchments_file)
             self.catchments = self._validate_crs_transformation(self.catchments, "NHD+ catchments", target_crs)
             
+            # Perform geometry diagnostics and repair
+            geometry_config = self.config.get('geometry_repair', {})
+            if geometry_config.get('enable_diagnostics', True) or geometry_config.get('enable_repair_attempts', True):
+                self.catchments = self.geometry_diagnostics.diagnose_and_repair_geometries(self.catchments, "NHD+ catchments")
+            
             # Perform schema validation
             if not self._validate_catchments_schema(self.catchments):
                 if self.config.get('memory_management', {}).get('fail_on_validation_errors', False):
@@ -797,6 +861,11 @@ class TruthExtractor:
                 if flowlines_file.exists():
                     self.flowlines = gpd.read_file(flowlines_file)
                     self.flowlines = self._validate_crs_transformation(self.flowlines, "NHD+ flowlines", target_crs)
+                    
+                    # Perform geometry diagnostics and repair
+                    geometry_config = self.config.get('geometry_repair', {})
+                    if geometry_config.get('enable_diagnostics', True) or geometry_config.get('enable_repair_attempts', True):
+                        self.flowlines = self.geometry_diagnostics.diagnose_and_repair_geometries(self.flowlines, "NHD+ flowlines")
                     
                     # Perform schema validation
                     if not self._validate_flowlines_schema(self.flowlines):
