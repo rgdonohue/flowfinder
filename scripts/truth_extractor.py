@@ -119,6 +119,53 @@ class TruthExtractor:
                 'gc_frequency': 50,  # Garbage collection frequency (every N extractions)
                 'monitor_memory': True  # Enable memory monitoring
             },
+            'shapefile_schemas': {
+                'basin_sample': {
+                    'required_columns': ['ID', 'Pour_Point_Lat', 'Pour_Point_Lon'],
+                    'column_types': {
+                        'ID': 'string',
+                        'Pour_Point_Lat': 'float',
+                        'Pour_Point_Lon': 'float',
+                        'Area_km2': 'float',
+                        'Terrain_Class': 'string'
+                    },
+                    'not_null_columns': ['ID', 'Pour_Point_Lat', 'Pour_Point_Lon'],
+                    'value_ranges': {
+                        'Pour_Point_Lat': {'min': 25, 'max': 55},  # Mountain West latitudes
+                        'Pour_Point_Lon': {'min': -125, 'max': -100},  # Mountain West longitudes
+                        'Area_km2': {'min': 0.01, 'max': 10000}
+                    }
+                },
+                'nhd_catchments': {
+                    'required_columns': ['FEATUREID'],
+                    'column_types': {
+                        'FEATUREID': 'integer',
+                        'GRIDCODE': 'integer',
+                        'AREASQKM': 'float'
+                    },
+                    'not_null_columns': ['FEATUREID'],
+                    'geometry_type': 'Polygon',
+                    'value_ranges': {
+                        'FEATUREID': {'min': 1},
+                        'AREASQKM': {'min': 0.001, 'max': 5000}
+                    },
+                    'consistency_rules': {
+                        'unique_values': {'columns': ['FEATUREID']}
+                    }
+                },
+                'nhd_flowlines': {
+                    'required_columns': ['COMID'],
+                    'column_types': {
+                        'COMID': 'integer',
+                        'LENGTHKM': 'float'
+                    },
+                    'not_null_columns': ['COMID'],
+                    'geometry_type': 'LineString',
+                    'consistency_rules': {
+                        'unique_values': {'columns': ['COMID']}
+                    }
+                }
+            },
             'extraction_priority': {
                 1: 'contains_point',
                 2: 'largest_containing', 
@@ -508,6 +555,156 @@ class TruthExtractor:
             self.logger.warning(f"Could not get file size for {file_path}: {e}")
             return 0.0
     
+    def _validate_basin_sample_schema(self, df: pd.DataFrame) -> bool:
+        """
+        Validate basin sample CSV schema.
+        
+        Args:
+            df: DataFrame to validate
+            
+        Returns:
+            True if validation passes, False otherwise
+        """
+        schema_config = self.config.get('shapefile_schemas', {}).get('basin_sample', {})
+        if not schema_config:
+            return True
+        
+        validation_passed = True
+        
+        # Check required columns
+        required_columns = schema_config.get('required_columns', [])
+        missing_cols = [col for col in required_columns if col not in df.columns]
+        if missing_cols:
+            self.logger.error(f"Basin sample missing required columns: {missing_cols}")
+            validation_passed = False
+        
+        # Check data types and ranges
+        for col_name in required_columns:
+            if col_name not in df.columns:
+                continue
+            
+            # Check for null values in required columns
+            null_count = df[col_name].isnull().sum()
+            if null_count > 0:
+                self.logger.error(f"Basin sample column '{col_name}' has {null_count} null values")
+                validation_passed = False
+            
+            # Check value ranges
+            value_ranges = schema_config.get('value_ranges', {}).get(col_name, {})
+            if value_ranges and pd.api.types.is_numeric_dtype(df[col_name]):
+                if 'min' in value_ranges:
+                    min_val = df[col_name].min()
+                    if min_val < value_ranges['min']:
+                        self.logger.warning(f"Basin sample column '{col_name}' has values below minimum: {min_val} < {value_ranges['min']}")
+                
+                if 'max' in value_ranges:
+                    max_val = df[col_name].max()
+                    if max_val > value_ranges['max']:
+                        self.logger.warning(f"Basin sample column '{col_name}' has values above maximum: {max_val} > {value_ranges['max']}")
+        
+        return validation_passed
+    
+    def _validate_catchments_schema(self, gdf: gpd.GeoDataFrame) -> bool:
+        """
+        Validate NHD+ catchments shapefile schema.
+        
+        Args:
+            gdf: GeoDataFrame to validate
+            
+        Returns:
+            True if validation passes, False otherwise
+        """
+        schema_config = self.config.get('shapefile_schemas', {}).get('nhd_catchments', {})
+        if not schema_config:
+            return True
+        
+        validation_passed = True
+        
+        # Check required columns
+        required_columns = schema_config.get('required_columns', [])
+        missing_cols = [col for col in required_columns if col not in gdf.columns]
+        if missing_cols:
+            self.logger.error(f"NHD+ catchments missing required columns: {missing_cols}")
+            validation_passed = False
+        
+        # Check geometry validity
+        if len(gdf) > 0:
+            invalid_geoms = ~gdf.is_valid
+            invalid_count = invalid_geoms.sum()
+            if invalid_count > 0:
+                invalid_percentage = (invalid_count / len(gdf)) * 100
+                if invalid_percentage > 10:
+                    self.logger.error(f"NHD+ catchments has high percentage of invalid geometries: {invalid_percentage:.1f}%")
+                    validation_passed = False
+                else:
+                    self.logger.warning(f"NHD+ catchments has some invalid geometries: {invalid_count} ({invalid_percentage:.1f}%)")
+        
+        # Check for duplicate FEATUREID values
+        if 'FEATUREID' in gdf.columns:
+            duplicates = gdf['FEATUREID'].duplicated().sum()
+            if duplicates > 0:
+                self.logger.warning(f"NHD+ catchments has {duplicates} duplicate FEATUREID values")
+        
+        self.logger.info(f"NHD+ catchments schema validation: {'PASSED' if validation_passed else 'FAILED'}")
+        return validation_passed
+    
+    def _validate_flowlines_schema(self, gdf: gpd.GeoDataFrame) -> bool:
+        """
+        Validate NHD+ flowlines shapefile schema.
+        
+        Args:
+            gdf: GeoDataFrame to validate
+            
+        Returns:
+            True if validation passes, False otherwise
+        """
+        schema_config = self.config.get('shapefile_schemas', {}).get('nhd_flowlines', {})
+        if not schema_config:
+            return True
+        
+        validation_passed = True
+        
+        # Check required columns
+        required_columns = schema_config.get('required_columns', [])
+        missing_cols = [col for col in required_columns if col not in gdf.columns]
+        if missing_cols:
+            self.logger.error(f"NHD+ flowlines missing required columns: {missing_cols}")
+            validation_passed = False
+        
+        # Check geometry type
+        expected_geom_type = schema_config.get('geometry_type', 'LineString')
+        if len(gdf) > 0:
+            geom_types = gdf.geom_type.unique()
+            if expected_geom_type not in geom_types:
+                self.logger.error(f"NHD+ flowlines expected geometry type {expected_geom_type}, found: {list(geom_types)}")
+                validation_passed = False
+        
+        # Check for duplicate COMID values
+        if 'COMID' in gdf.columns:
+            duplicates = gdf['COMID'].duplicated().sum()
+            if duplicates > 0:
+                self.logger.warning(f"NHD+ flowlines has {duplicates} duplicate COMID values")
+        
+        # Check value ranges
+        value_ranges = schema_config.get('value_ranges', {})
+        for col_name, ranges in value_ranges.items():
+            if col_name not in gdf.columns:
+                continue
+            
+            if pd.api.types.is_numeric_dtype(gdf[col_name]):
+                if 'min' in ranges:
+                    min_val = gdf[col_name].min()
+                    if min_val < ranges['min']:
+                        self.logger.warning(f"NHD+ flowlines column '{col_name}' has values below minimum: {min_val} < {ranges['min']}")
+                
+                if 'max' in ranges:
+                    max_val = gdf[col_name].max()
+                    if max_val > ranges['max']:
+                        self.logger.warning(f"NHD+ flowlines column '{col_name}' has values above maximum: {max_val} > {ranges['max']}")
+        
+        self.logger.info(f"NHD+ flowlines schema validation: {'PASSED' if validation_passed else 'FAILED'}")
+        return validation_passed
+    
     def load_datasets(self) -> None:
         """
         Load all required datasets for truth extraction.
@@ -540,11 +737,12 @@ class TruthExtractor:
             # Load CSV and create GeoDataFrame
             df = pd.read_csv(sample_file)
             
-            # Validate required columns
-            required_cols = ['ID', 'Pour_Point_Lat', 'Pour_Point_Lon']
-            missing_cols = [col for col in required_cols if col not in df.columns]
-            if missing_cols:
-                raise ValueError(f"Missing required columns in basin sample: {missing_cols}")
+            # Perform schema validation
+            if not self._validate_basin_sample_schema(df):
+                if self.config.get('memory_management', {}).get('fail_on_validation_errors', False):
+                    raise ValueError("Basin sample CSV failed schema validation")
+                else:
+                    self.logger.warning("Basin sample CSV validation failed - proceeding with caution")
             
             # Create point geometries from lat/lon
             geometry = [Point(lon, lat) for lon, lat in zip(df['Pour_Point_Lon'], df['Pour_Point_Lat'])]
@@ -578,6 +776,13 @@ class TruthExtractor:
             self.catchments = gpd.read_file(catchments_file)
             self.catchments = self._validate_crs_transformation(self.catchments, "NHD+ catchments", target_crs)
             
+            # Perform schema validation
+            if not self._validate_catchments_schema(self.catchments):
+                if self.config.get('memory_management', {}).get('fail_on_validation_errors', False):
+                    raise ValueError("NHD+ catchments failed schema validation")
+                else:
+                    self.logger.warning("NHD+ catchments schema validation failed - proceeding with caution")
+            
             # Ensure required columns exist
             if 'FEATUREID' not in self.catchments.columns:
                 self.logger.warning("FEATUREID column not found in catchments - using index")
@@ -592,6 +797,14 @@ class TruthExtractor:
                 if flowlines_file.exists():
                     self.flowlines = gpd.read_file(flowlines_file)
                     self.flowlines = self._validate_crs_transformation(self.flowlines, "NHD+ flowlines", target_crs)
+                    
+                    # Perform schema validation
+                    if not self._validate_flowlines_schema(self.flowlines):
+                        if self.config.get('memory_management', {}).get('fail_on_validation_errors', False):
+                            raise ValueError("NHD+ flowlines failed schema validation")
+                        else:
+                            self.logger.warning("NHD+ flowlines schema validation failed - proceeding with caution")
+                    
                     self.logger.info(f"Loaded {len(self.flowlines)} flowlines")
                 else:
                     self.logger.warning(f"Flowlines file not found: {flowlines_file}")
