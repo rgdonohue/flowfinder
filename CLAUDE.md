@@ -147,3 +147,22 @@ Focus on testing critical geospatial operations, data quality validation, and co
 - `tests/` - Comprehensive test suite
 - `notebooks/` - Jupyter analysis notebooks
 - `docs/` - Documentation and PRD
+
+DO NOT suggest:
+- Switching to async/await unless solving specific I/O bottlenecks
+- Adding ORM/database layers for simple file-based workflows
+- Complex design patterns (Factory, Observer, etc.) for straightforward scripts
+- Microservices splitting for this monolithic tool
+- Advanced configuration management beyond YAML files
+- Logging frameworks beyond Python's built-in logging
+- API frameworks unless specifically needed
+
+DO focus on:
+- Spatial operation correctness and edge cases
+- File handling robustness (permissions, disk space, corruption)
+- Memory efficiency with large geospatial datasets
+- CLI interface usability and error messages
+- Configuration validation and helpful error messages
+- Test coverage for critical spatial operations
+- Documentation clarity for scientific users
+- Performance with realistic dataset sizes
