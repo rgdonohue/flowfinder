@@ -27,6 +27,8 @@ import argparse
 import logging
 import sys
 import warnings
+import gc
+import psutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Any
@@ -111,6 +113,12 @@ class TruthExtractor:
             'max_attempts': 3,  # maximum extraction attempts
             'retry_with_different_strategies': True,
             'chunk_size': 100,  # for memory management
+            'memory_management': {
+                'max_memory_mb': 2048,  # Maximum memory usage in MB
+                'large_file_threshold_mb': 50,  # Files larger than this get special handling
+                'gc_frequency': 50,  # Garbage collection frequency (every N extractions)
+                'monitor_memory': True  # Enable memory monitoring
+            },
             'extraction_priority': {
                 1: 'contains_point',
                 2: 'largest_containing', 
@@ -445,6 +453,61 @@ class TruthExtractor:
         except Exception:
             return None
     
+    def _get_memory_usage(self) -> Dict[str, float]:
+        """Get current memory usage information."""
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        
+        return {
+            'rss_mb': memory_info.rss / 1024 / 1024,  # Resident Set Size
+            'vms_mb': memory_info.vms / 1024 / 1024,  # Virtual Memory Size
+            'percent': process.memory_percent(),
+            'available_mb': psutil.virtual_memory().available / 1024 / 1024
+        }
+    
+    def _check_memory_usage(self, operation: str = "operation") -> bool:
+        """
+        Check if memory usage is within acceptable limits.
+        
+        Args:
+            operation: Description of current operation for logging
+            
+        Returns:
+            True if memory usage is acceptable, False if approaching limits
+        """
+        memory_config = self.config.get('memory_management', {})
+        if not memory_config.get('monitor_memory', True):
+            return True
+        
+        memory_info = self._get_memory_usage()
+        max_memory_mb = memory_config.get('max_memory_mb', 2048)
+        
+        if memory_info['rss_mb'] > max_memory_mb:
+            self.logger.warning(f"Memory usage ({memory_info['rss_mb']:.1f} MB) exceeds limit "
+                              f"({max_memory_mb} MB) during {operation}")
+            return False
+        
+        if memory_info['percent'] > 80:
+            self.logger.warning(f"High memory usage ({memory_info['percent']:.1f}%) during {operation}")
+            return False
+        
+        self.logger.debug(f"Memory usage during {operation}: {memory_info['rss_mb']:.1f} MB "
+                         f"({memory_info['percent']:.1f}%)")
+        return True
+    
+    def _force_garbage_collection(self) -> None:
+        """Force garbage collection to free memory."""
+        gc.collect()
+        self.logger.debug("Forced garbage collection")
+    
+    def _get_file_size_mb(self, file_path: Path) -> float:
+        """Get file size in MB."""
+        try:
+            return file_path.stat().st_size / 1024 / 1024
+        except Exception as e:
+            self.logger.warning(f"Could not get file size for {file_path}: {e}")
+            return 0.0
+    
     def load_datasets(self) -> None:
         """
         Load all required datasets for truth extraction.
@@ -497,15 +560,21 @@ class TruthExtractor:
             raise
     
     def _load_nhd_data(self) -> None:
-        """Load NHD+ HR catchments and optional flowlines."""
+        """Load NHD+ HR catchments and optional flowlines with memory management."""
         data_dir = Path(self.config['data_dir'])
         files = self.config['files']
         target_crs = self.config['target_crs']
         
         try:
-            # Load catchments
+            # Load catchments with memory monitoring
             self.logger.info("Loading NHD+ HR catchments...")
             catchments_file = data_dir / files['nhd_catchments']
+            
+            # Check file size and memory before loading
+            file_size_mb = self._get_file_size_mb(catchments_file)
+            self.logger.info(f"NHD+ catchments file size: {file_size_mb:.1f} MB")
+            self._check_memory_usage("NHD+ catchments loading")
+            
             self.catchments = gpd.read_file(catchments_file)
             self.catchments = self._validate_crs_transformation(self.catchments, "NHD+ catchments", target_crs)
             
@@ -547,10 +616,16 @@ class TruthExtractor:
         if self.basin_sample is None or self.catchments is None:
             raise ValueError("Basin sample and catchments must be loaded")
         
-        self.logger.info("Extracting truth polygons via spatial join...")
+        self.logger.info("Extracting truth polygons via spatial join with memory management...")
         
         buffer_tolerance = self.config['buffer_tolerance']
         truth_polygons = []
+        
+        # Memory management configuration
+        memory_config = self.config.get('memory_management', {})
+        gc_frequency = memory_config.get('gc_frequency', 50)
+        processed_count = 0
+        memory_warnings = 0
         
         for idx, basin in tqdm(self.basin_sample.iterrows(), total=len(self.basin_sample), desc="Extracting truth polygons"):
             basin_id = str(basin['ID'])
@@ -589,9 +664,24 @@ class TruthExtractor:
                 
                 truth_polygons.append(truth_poly)
                 
+                # Memory management
+                processed_count += 1
+                if processed_count % gc_frequency == 0:
+                    # Check memory usage periodically
+                    if not self._check_memory_usage(f"truth extraction (processed {processed_count})"):
+                        memory_warnings += 1
+                        self._force_garbage_collection()
+                
             except Exception as e:
                 self._log_error(basin_id, 'extraction_error', str(e))
                 continue
+        
+        # Log memory management statistics
+        if memory_warnings > 0:
+            self.logger.warning(f"Encountered {memory_warnings} memory warnings during extraction")
+        
+        # Final cleanup
+        self._force_garbage_collection()
         
         if not truth_polygons:
             raise ValueError("No truth polygons extracted - check spatial data and configuration")
