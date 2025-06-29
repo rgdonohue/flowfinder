@@ -535,12 +535,12 @@ class BenchmarkRunner:
                 # Assess performance
                 performance = self._assess_performance(metrics['iou'], metrics['centroid_offset'], terrain_class)
                 
-                # Create result record
+                # Create result record with None handling
                 result = {
                     "ID": basin_id,
-                    "IOU": round(metrics['iou'], 4),
-                    "Boundary_Ratio": round(metrics['boundary_ratio'], 4),
-                    "Centroid_Offset_m": round(metrics['centroid_offset'], 1),
+                    "IOU": round(metrics['iou'], 4) if metrics['iou'] is not None else None,
+                    "Boundary_Ratio": round(metrics['boundary_ratio'], 4) if metrics['boundary_ratio'] is not None else None,
+                    "Centroid_Offset_m": round(metrics['centroid_offset'], 1) if metrics['centroid_offset'] is not None else None,
                     "Runtime_s": round(runtime, 2),
                     "Terrain_Class": terrain_class,
                     "Size_Class": row.get("Size_Class", "unknown"),
@@ -549,14 +549,21 @@ class BenchmarkRunner:
                     "Centroid_Pass": performance['centroid_pass'],
                     "Overall_Pass": performance['overall_pass'],
                     "IOU_Target": performance['iou_target'],
-                    "Centroid_Target": performance['centroid_target']
+                    "Centroid_Target": performance['centroid_target'],
+                    "Geometry_Status": metrics.get('status', 'unknown')
                 }
                 
                 self.results.append(result)
                 
-                # Progress update
-                status = "✅ PASS" if performance['overall_pass'] else "❌ FAIL"
-                self.logger.info(f"Basin {basin_id} [{i+1}/{len(self.sample_df)}]: {status} | IOU={metrics['iou']:.3f} | t={runtime:.1f}s")
+                # Progress update with None handling
+                if metrics['status'] == 'invalid_geometry':
+                    status = "⚠️ INVALID"
+                    iou_str = "N/A"
+                else:
+                    status = "✅ PASS" if performance['overall_pass'] else "❌ FAIL"
+                    iou_str = f"{metrics['iou']:.3f}" if metrics['iou'] is not None else "N/A"
+                
+                self.logger.info(f"Basin {basin_id} [{i+1}/{len(self.sample_df)}]: {status} | IOU={iou_str} | t={runtime:.1f}s")
                 
             except Exception as e:
                 error_msg = f"Unexpected error: {e}"
@@ -669,8 +676,16 @@ class BenchmarkRunner:
         except Exception as e:
             raise ValueError(f"Projection error: {e}")
         
-        # Calculate IOU
+        # Calculate IOU with validation
         iou = self._compute_iou(pred_proj, truth_proj)
+        if iou == -1.0:
+            self.logger.error("IOU calculation failed - marking basin as invalid")
+            return {
+                'iou': None,  # Use None to indicate invalid calculation
+                'boundary_ratio': None,
+                'centroid_offset': None,
+                'status': 'invalid_geometry'
+            }
         
         # Calculate boundary ratio
         boundary_ratio = self._compute_boundary_ratio(pred_proj, truth_proj)
@@ -681,28 +696,178 @@ class BenchmarkRunner:
         return {
             'iou': iou,
             'boundary_ratio': boundary_ratio,
-            'centroid_offset': centroid_offset
+            'centroid_offset': centroid_offset,
+            'status': 'valid'
         }
     
     def _compute_iou(self, pred: Any, truth: Any) -> float:
-        """Compute Intersection over Union between two polygons."""
+        """
+        Compute Intersection over Union between two polygons with robust error handling.
+        
+        Returns:
+            float: IOU value between 0 and 1, or -1.0 for invalid calculations
+        """
+        # Pre-calculation validation
+        validation_result = self._validate_geometries_for_iou(pred, truth)
+        if validation_result is not None:
+            return validation_result
+        
         try:
-            pred = make_valid(pred)
-            truth = make_valid(truth)
+            # Repair geometries with validation
+            pred_repaired = make_valid(pred)
+            truth_repaired = make_valid(truth)
             
-            if pred.is_empty or truth.is_empty:
-                return 0.0
-                
-            inter = pred.intersection(truth)
-            union = unary_union([pred, truth])
+            # Validate repair results
+            if not self._validate_repaired_geometry(pred_repaired, "predicted"):
+                return -1.0
+            if not self._validate_repaired_geometry(truth_repaired, "truth"):
+                return -1.0
             
-            if union.area == 0:
-                return 0.0
+            # Compute intersection with validation
+            try:
+                intersection = pred_repaired.intersection(truth_repaired)
+                if intersection is None or intersection.is_empty:
+                    self.logger.debug("No intersection between geometries - returning 0.0")
+                    return 0.0
+                    
+                # Validate intersection result
+                if not self._is_valid_area_geometry(intersection):
+                    self.logger.error("Intersection operation produced invalid geometry")
+                    return -1.0
+                    
+            except Exception as e:
+                self.logger.error(f"Intersection operation failed: {e}")
+                return -1.0
+            
+            # Compute union with validation
+            try:
+                union = unary_union([pred_repaired, truth_repaired])
+                if union is None or union.is_empty:
+                    self.logger.error("Union operation produced empty geometry")
+                    return -1.0
+                    
+                # Validate union result
+                if not self._is_valid_area_geometry(union):
+                    self.logger.error("Union operation produced invalid geometry")
+                    return -1.0
+                    
+            except Exception as e:
+                self.logger.error(f"Union operation failed: {e}")
+                return -1.0
+            
+            # Calculate areas with validation
+            try:
+                intersection_area = intersection.area
+                union_area = union.area
                 
-            return inter.area / union.area
+                # Validate areas
+                if intersection_area < 0 or union_area <= 0:
+                    self.logger.error(f"Invalid areas: intersection={intersection_area}, union={union_area}")
+                    return -1.0
+                
+                if intersection_area > union_area:
+                    self.logger.error(f"Invalid geometry topology: intersection area ({intersection_area}) > union area ({union_area})")
+                    return -1.0
+                
+                # Calculate IOU
+                iou = intersection_area / union_area
+                
+                # Validate IOU result
+                if not (0.0 <= iou <= 1.0):
+                    self.logger.error(f"Invalid IOU calculated: {iou}")
+                    return -1.0
+                
+                return iou
+                
+            except Exception as e:
+                self.logger.error(f"Area calculation failed: {e}")
+                return -1.0
+                
         except Exception as e:
-            self.logger.warning(f"IOU calculation failed: {e}")
+            self.logger.error(f"IOU calculation failed with unexpected error: {e}")
+            return -1.0
+    
+    def _validate_geometries_for_iou(self, pred: Any, truth: Any) -> Optional[float]:
+        """Validate input geometries before IOU calculation."""
+        # Check for None geometries
+        if pred is None:
+            self.logger.error("Predicted geometry is None - cannot compute IOU")
+            return -1.0
+        if truth is None:
+            self.logger.error("Truth geometry is None - cannot compute IOU")
+            return -1.0
+        
+        # Check for empty geometries
+        if pred.is_empty:
+            self.logger.warning("Predicted geometry is empty - returning IOU=0.0")
             return 0.0
+        if truth.is_empty:
+            self.logger.warning("Truth geometry is empty - returning IOU=0.0")
+            return 0.0
+        
+        # Check geometry types
+        valid_types = ('Polygon', 'MultiPolygon')
+        if pred.geom_type not in valid_types:
+            self.logger.error(f"Predicted geometry type '{pred.geom_type}' not suitable for IOU calculation")
+            return -1.0
+        if truth.geom_type not in valid_types:
+            self.logger.error(f"Truth geometry type '{truth.geom_type}' not suitable for IOU calculation")
+            return -1.0
+        
+        # Check for extremely small geometries (likely numerical precision issues)
+        min_area = 1e-12  # Square meters
+        if pred.area < min_area:
+            self.logger.warning(f"Predicted geometry area ({pred.area}) extremely small - potential precision issue")
+        if truth.area < min_area:
+            self.logger.warning(f"Truth geometry area ({truth.area}) extremely small - potential precision issue")
+        
+        return None  # No validation issues found
+    
+    def _validate_repaired_geometry(self, geom: Any, geom_type: str) -> bool:
+        """Validate that geometry repair was successful."""
+        if geom is None:
+            self.logger.error(f"Geometry repair failed: {geom_type} geometry is None after make_valid()")
+            return False
+        
+        if geom.is_empty:
+            self.logger.error(f"Geometry repair failed: {geom_type} geometry is empty after make_valid()")
+            return False
+        
+        # Check that repair didn't change geometry type inappropriately
+        valid_types = ('Polygon', 'MultiPolygon', 'GeometryCollection')
+        if geom.geom_type not in valid_types:
+            self.logger.error(f"Geometry repair produced invalid type: {geom_type} geometry is now {geom.geom_type}")
+            return False
+        
+        # Check for validity
+        if not geom.is_valid:
+            self.logger.error(f"Geometry repair failed: {geom_type} geometry still invalid after make_valid()")
+            return False
+        
+        return True
+    
+    def _is_valid_area_geometry(self, geom: Any) -> bool:
+        """Check if geometry is suitable for area calculations."""
+        if geom is None or geom.is_empty:
+            return False
+        
+        # Check geometry type
+        valid_types = ('Polygon', 'MultiPolygon', 'GeometryCollection')
+        if geom.geom_type not in valid_types:
+            self.logger.error(f"Geometry type '{geom.geom_type}' not suitable for area calculation")
+            return False
+        
+        # Check validity
+        if not geom.is_valid:
+            self.logger.error("Geometry is invalid for area calculation")
+            return False
+        
+        # Check for reasonable area
+        if geom.area < 0:
+            self.logger.error(f"Geometry has negative area: {geom.area}")
+            return False
+        
+        return True
     
     def _compute_boundary_ratio(self, pred: Any, truth: Any) -> float:
         """Compute predicted / truth boundary length ratio."""
@@ -722,13 +887,13 @@ class BenchmarkRunner:
             self.logger.warning(f"Centroid offset calculation failed: {e}")
             return float('inf')
     
-    def _assess_performance(self, iou: float, centroid_offset: float, terrain_class: str) -> Dict[str, Any]:
+    def _assess_performance(self, iou: Optional[float], centroid_offset: Optional[float], terrain_class: str) -> Dict[str, Any]:
         """
         Assess performance against terrain-specific thresholds.
         
         Args:
-            iou: Intersection over Union value
-            centroid_offset: Centroid offset in meters
+            iou: Intersection over Union value (None if calculation failed)
+            centroid_offset: Centroid offset in meters (None if calculation failed)
             terrain_class: Terrain classification
             
         Returns:
@@ -740,8 +905,18 @@ class BenchmarkRunner:
         iou_target = iou_thresholds.get(terrain_class, iou_thresholds['default'])
         centroid_target = centroid_thresholds.get(terrain_class, centroid_thresholds['default'])
         
-        iou_pass = iou >= iou_target
-        centroid_pass = centroid_offset <= centroid_target
+        # Handle None values (invalid calculations)
+        if iou is None:
+            iou_pass = False
+            self.logger.warning("IOU is None - marking as failed")
+        else:
+            iou_pass = iou >= iou_target
+            
+        if centroid_offset is None:
+            centroid_pass = False
+            self.logger.warning("Centroid offset is None - marking as failed")
+        else:
+            centroid_pass = centroid_offset <= centroid_target
         
         return {
             'iou_pass': iou_pass,
@@ -807,12 +982,24 @@ class BenchmarkRunner:
             f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Total basins tested: {len(results_df)}\n\n")
             
-            # Overall Performance
+            # Overall Performance with None handling
             f.write("Overall Performance:\n")
-            f.write(f"  Mean IOU: {results_df['IOU'].mean():.3f}\n")
-            f.write(f"  Median IOU: {results_df['IOU'].median():.3f}\n")
-            f.write(f"  90th percentile IOU: {results_df['IOU'].quantile(0.9):.3f}\n")
-            f.write(f"  95th percentile IOU: {results_df['IOU'].quantile(0.95):.3f}\n")
+            
+            # Filter out None values for statistics
+            valid_iou = results_df['IOU'].dropna()
+            invalid_count = results_df['IOU'].isna().sum()
+            
+            if len(valid_iou) > 0:
+                f.write(f"  Mean IOU: {valid_iou.mean():.3f}\n")
+                f.write(f"  Median IOU: {valid_iou.median():.3f}\n")
+                f.write(f"  90th percentile IOU: {valid_iou.quantile(0.9):.3f}\n")
+                f.write(f"  95th percentile IOU: {valid_iou.quantile(0.95):.3f}\n")
+            else:
+                f.write("  No valid IOU calculations available\n")
+            
+            if invalid_count > 0:
+                f.write(f"  Invalid geometry calculations: {invalid_count} ({invalid_count/len(results_df)*100:.1f}%)\n")
+            
             f.write(f"  Mean runtime: {results_df['Runtime_s'].mean():.1f}s\n")
             f.write(f"  Median runtime: {results_df['Runtime_s'].median():.1f}s\n")
             f.write(f"  95th percentile runtime: {results_df['Runtime_s'].quantile(0.95):.1f}s\n\n")
@@ -832,14 +1019,24 @@ class BenchmarkRunner:
             for terrain in ['flat', 'moderate', 'steep']:
                 terrain_data = results_df[results_df['Terrain_Class'] == terrain]
                 if len(terrain_data) > 0:
-                    mean_iou = terrain_data['IOU'].mean()
+                    valid_terrain_iou = terrain_data['IOU'].dropna()
+                    terrain_invalid_count = terrain_data['IOU'].isna().sum()
+                    
                     pass_rate = terrain_data['Overall_Pass'].mean() * 100
                     mean_runtime = terrain_data['Runtime_s'].mean()
                     target_iou = self.config['success_thresholds'].get(terrain, 0.90)
                     
                     f.write(f"  {terrain.capitalize()}:\n")
                     f.write(f"    Basins: {len(terrain_data)}\n")
-                    f.write(f"    Mean IOU: {mean_iou:.3f} (target: {target_iou:.3f})\n")
+                    
+                    if len(valid_terrain_iou) > 0:
+                        f.write(f"    Mean IOU: {valid_terrain_iou.mean():.3f} (target: {target_iou:.3f})\n")
+                    else:
+                        f.write(f"    Mean IOU: N/A - no valid calculations (target: {target_iou:.3f})\n")
+                    
+                    if terrain_invalid_count > 0:
+                        f.write(f"    Invalid geometries: {terrain_invalid_count}\n")
+                    
                     f.write(f"    Pass rate: {pass_rate:.1f}%\n")
                     f.write(f"    Mean runtime: {mean_runtime:.1f}s\n\n")
             
@@ -849,12 +1046,21 @@ class BenchmarkRunner:
             for size_class in ['small', 'medium', 'large']:
                 size_data = results_df[results_df['Size_Class'] == size_class]
                 if len(size_data) > 0:
-                    mean_iou = size_data['IOU'].mean()
+                    valid_size_iou = size_data['IOU'].dropna()
+                    size_invalid_count = size_data['IOU'].isna().sum()
                     mean_runtime = size_data['Runtime_s'].mean()
                     
                     f.write(f"  {size_mapping[size_class]}:\n")
                     f.write(f"    Basins: {len(size_data)}\n")
-                    f.write(f"    Mean IOU: {mean_iou:.3f}\n")
+                    
+                    if len(valid_size_iou) > 0:
+                        f.write(f"    Mean IOU: {valid_size_iou.mean():.3f}\n")
+                    else:
+                        f.write(f"    Mean IOU: N/A - no valid calculations\n")
+                    
+                    if size_invalid_count > 0:
+                        f.write(f"    Invalid geometries: {size_invalid_count}\n")
+                    
                     f.write(f"    Mean runtime: {mean_runtime:.1f}s\n\n")
             
             # Key Findings
@@ -865,15 +1071,24 @@ class BenchmarkRunner:
             runtime_target_met = (results_df['Runtime_s'] <= runtime_target).mean() * 100
             f.write(f"  • {runtime_target_met:.1f}% of basins completed within {runtime_target}s target\n")
             
-            # IOU target assessment
+            # IOU target assessment with None handling
             iou_target = self.config['performance_analysis']['iou_target']
-            target_met = (results_df['IOU'] >= iou_target).mean() * 100
-            f.write(f"  • {target_met:.1f}% of basins achieved ≥{iou_target:.0%} IOU\n")
+            valid_for_target = results_df['IOU'].dropna()
+            if len(valid_for_target) > 0:
+                target_met = (valid_for_target >= iou_target).mean() * 100
+                f.write(f"  • {target_met:.1f}% of valid calculations achieved ≥{iou_target:.0%} IOU\n")
+            else:
+                f.write(f"  • No valid IOU calculations to assess {iou_target:.0%} target\n")
             
-            # Identify problem cases
-            low_iou = results_df[results_df['IOU'] < 0.8]
+            # Identify problem cases (exclude None values)
+            low_iou = results_df[(results_df['IOU'].notna()) & (results_df['IOU'] < 0.8)]
             if len(low_iou) > 0:
                 f.write(f"  • {len(low_iou)} basins with IOU < 0.8 (investigate)\n")
+            
+            # Report invalid geometry cases
+            invalid_geom = results_df[results_df['Geometry_Status'] == 'invalid_geometry']
+            if len(invalid_geom) > 0:
+                f.write(f"  • {len(invalid_geom)} basins with invalid geometry calculations (critical issue)\n")
             
             slow_basins = results_df[results_df['Runtime_s'] > 60]
             if len(slow_basins) > 0:
