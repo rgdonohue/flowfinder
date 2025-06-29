@@ -1,0 +1,250 @@
+# FLOWFINDER Truth Extractor Configuration
+# Extract USGS NHD+ HR watershed polygons as ground truth
+# Optimized for Mountain West region with diverse terrain types
+
+# =============================================================================
+# DATA PATHS
+# =============================================================================
+
+# Base directory containing input datasets
+# All relative paths are resolved from this directory
+data_dir: data/
+
+# Basin sample file (output from basin_sampler.py)
+# Contains pour points and metadata for truth polygon extraction
+basin_sample_file: basin_sample.csv
+
+# Input file specifications
+# Ensure all files are in the same coordinate reference system
+files:
+  # NHD+ HR catchment polygons
+  # Source: USGS National Hydrography Dataset Plus High Resolution
+  # Format: Shapefile with catchment attributes and flow relationships
+  nhd_catchments: nhd_hr_catchments.shp
+  
+  # NHD+ HR flowlines (optional, for drainage validation)
+  # Source: USGS National Hydrography Dataset Plus High Resolution
+  # Format: Shapefile with flowline attributes and network topology
+  nhd_flowlines: nhd_flowlines.shp
+
+# =============================================================================
+# EXTRACTION PARAMETERS
+# =============================================================================
+
+# Buffer tolerance for spatial join (meters)
+# Distance within which to search for intersecting catchments
+# 500m accounts for potential coordinate system differences and data alignment
+buffer_tolerance: 500
+
+# Area ratio thresholds for truth validation
+# Ensures extracted truth polygons are reasonable size relative to sample basins
+# Mountain West basins can vary greatly in size due to terrain complexity
+min_area_ratio: 0.1   # minimum truth area / sample area ratio (10% of sample)
+max_area_ratio: 10.0  # maximum truth area / sample area ratio (10x sample)
+
+# =============================================================================
+# COORDINATE REFERENCE SYSTEMS
+# =============================================================================
+
+# Target CRS for spatial operations (Albers Equal Area CONUS)
+# EPSG:5070 provides equal-area projection for accurate area calculations
+# Covers the entire CONUS including Mountain West region
+target_crs: 'EPSG:5070'
+
+# Output CRS for export (WGS84)
+# WGS84 for compatibility with most GIS systems and web mapping
+output_crs: 'EPSG:4326'
+
+# =============================================================================
+# QUALITY CHECKS
+# =============================================================================
+
+# Enable/disable quality validation checks
+# These checks ensure extracted truth polygons meet quality standards
+quality_checks:
+  # Validate polygon topology (no self-intersections, valid geometry)
+  # Critical for accurate IOU calculations
+  topology_validation: true
+  
+  # Validate area ratios (truth polygon size relative to sample basin)
+  # Prevents unrealistic truth polygons that would skew accuracy metrics
+  area_validation: true
+  
+  # Check for completeness (holes, multipolygons, missing parts)
+  # Ensures truth polygons represent complete watersheds
+  completeness_check: true
+  
+  # Validate drainage network (requires flowlines)
+  # Checks that truth polygons follow logical drainage patterns
+  # May be disabled for performance or if flowlines unavailable
+  drainage_check: false
+
+# =============================================================================
+# EXTRACTION STRATEGY
+# =============================================================================
+
+# Priority order for catchment selection when multiple intersect
+# Determines which catchment to use when pour point intersects multiple catchments
+extraction_priority:
+  1: 'contains_point'      # Catchment contains the pour point (preferred)
+  2: 'largest_containing'  # Largest catchment containing point
+  3: 'nearest_centroid'    # Nearest catchment centroid
+  4: 'largest_intersecting' # Largest intersecting catchment (fallback)
+
+# =============================================================================
+# OUTPUT SETTINGS
+# =============================================================================
+
+# Enable/disable output formats
+export:
+  # GeoPackage format for spatial analysis in GIS software
+  gpkg: true
+  # Text summary for quick review and quality assessment
+  summary: true
+  # CSV log of failed extractions for debugging
+  failed_extractions: true
+
+# =============================================================================
+# PROCESSING OPTIONS
+# =============================================================================
+
+# Enable parallel processing (experimental)
+# Useful for large datasets but may cause memory issues
+parallel_processing: false
+max_workers: 4
+
+# Memory management
+# Process basins in chunks to manage memory usage
+# 100 basins per chunk is reasonable for truth extraction
+chunk_size: 100
+
+# =============================================================================
+# ERROR HANDLING
+# =============================================================================
+
+# Maximum number of extraction attempts per basin
+# Allows retrying with different strategies if initial extraction fails
+max_attempts: 3
+
+# Retry with different strategies on failure
+# If primary extraction strategy fails, try alternative approaches
+retry_with_different_strategies: true
+
+# Log detailed extraction steps
+# Provides verbose logging for debugging extraction issues
+log_extraction_steps: false
+
+# =============================================================================
+# VALIDATION THRESHOLDS
+# =============================================================================
+
+# Minimum polygon area (km²) - reject very small polygons
+# Prevents extraction of tiny catchments that may be data artifacts
+# 0.1 km² = 10 hectares, reasonable minimum for Mountain West basins
+min_polygon_area: 0.1
+
+# Maximum number of parts in multipolygon
+# Limits complexity of truth polygons for practical analysis
+# 5 parts allows for complex basins with islands or disconnected areas
+max_polygon_parts: 5
+
+# Maximum number of interior holes
+# Limits complexity while allowing for lakes, reservoirs, or data gaps
+# 3 holes reasonable for Mountain West basins with natural water bodies
+max_interior_holes: 3
+
+# Minimum drainage density (km/km²) for drainage validation
+# Ensures extracted catchments have reasonable stream networks
+# 0.01 km/km² = 1km of streams per 100km², minimum for Mountain West
+min_drainage_density: 0.01
+
+# =============================================================================
+# MOUNTAIN WEST SPECIFIC SETTINGS
+# =============================================================================
+
+# Terrain-specific extraction parameters
+terrain_extraction:
+  # Alpine terrain: High elevation, complex drainage patterns
+  alpine:
+    # Allow more complex polygons for alpine catchments
+    max_parts: 8
+    # Higher drainage density threshold for alpine streams
+    min_drainage_density: 0.02
+    # Larger buffer for coordinate uncertainty in steep terrain
+    buffer_tolerance: 750
+  
+  # Desert terrain: Low precipitation, ephemeral streams
+  desert:
+    # Allow simpler polygons for desert catchments
+    max_parts: 3
+    # Lower drainage density threshold for ephemeral streams
+    min_drainage_density: 0.005
+    # Smaller buffer for more predictable drainage patterns
+    buffer_tolerance: 300
+  
+  # Plateau terrain: Flat tops, steep sides
+  plateau:
+    # Moderate complexity for plateau catchments
+    max_parts: 5
+    # Moderate drainage density for plateau streams
+    min_drainage_density: 0.01
+    # Standard buffer tolerance
+    buffer_tolerance: 500
+
+# Climate-based adjustments
+climate_adjustments:
+  # Snow-dominated basins (alpine regions)
+  snow_dominated:
+    # Account for seasonal snow cover affecting drainage patterns
+    seasonal_adjustment: true
+    # Higher tolerance for drainage density variations
+    density_tolerance: 0.5
+  
+  # Ephemeral basins (desert regions)
+  ephemeral:
+    # Account for intermittent stream flow
+    intermittent_flow: true
+    # Lower drainage density requirements
+    density_tolerance: 0.3
+  
+  # Perennial basins (mountain valleys)
+  perennial:
+    # Standard perennial stream assumptions
+    perennial_flow: true
+    # Standard drainage density requirements
+    density_tolerance: 0.2
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+
+# Log level (DEBUG, INFO, WARNING, ERROR)
+# DEBUG: Detailed extraction steps and decisions
+# INFO: General progress and summary information
+# WARNING: Non-critical issues that don't stop processing
+# ERROR: Critical issues that may affect truth polygon quality
+log_level: INFO
+
+# Enable verbose output
+# Provides additional detail during extraction process
+verbose: false
+
+# Save detailed error logs
+# Creates structured error logs for debugging and quality assessment
+save_error_logs: true
+
+# =============================================================================
+# DEBUGGING
+# =============================================================================
+
+# Save intermediate results for debugging
+# Creates temporary files showing extraction steps
+save_intermediate: false
+
+# Export problematic basins for manual inspection
+# Saves basins that fail extraction for manual review
+export_problematic: false
+
+# Maximum number of problematic basins to export
+# Limits output size while providing debugging information
+max_problematic_export: 10 

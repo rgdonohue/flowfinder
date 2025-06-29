@@ -1,0 +1,151 @@
+# FLOWFINDER Accuracy Benchmark Pipeline Configuration
+# ===================================================
+
+pipeline:
+  name: "FLOWFINDER Accuracy Benchmark"
+  version: "1.0.0"
+  description: "Complete accuracy benchmark for FLOWFINDER watershed delineation in Mountain West region"
+  data_dir: "data"
+  checkpointing: true
+  resume_on_error: true
+  max_retries: 3
+  timeout_hours: 24
+  cleanup_on_success: false
+  generate_summary: true
+
+# Stage-specific configurations
+stages:
+  basin_sampling:
+    enabled: true
+    config_file: "config/basin_sampler_config.yaml"  # Optional stage-specific config
+    output_prefix: "basin_sample"
+    timeout_minutes: 60
+    retry_on_failure: true
+    description: "Stratified sampling of Mountain West basins"
+    
+  truth_extraction:
+    enabled: true
+    config_file: "config/truth_extractor_config.yaml"  # Optional stage-specific config
+    output_prefix: "truth_polygons"
+    timeout_minutes: 120
+    retry_on_failure: true
+    description: "Ground truth polygon extraction from NHD+ HR"
+    
+  benchmark_execution:
+    enabled: true
+    config_file: "config/benchmark_config.yaml"  # Optional stage-specific config
+    output_prefix: "benchmark_results"
+    timeout_minutes: 480  # 8 hours for full benchmark
+    retry_on_failure: false  # Don't retry benchmark due to computational cost
+    description: "FLOWFINDER accuracy and performance testing"
+
+# Reporting configuration
+reporting:
+  generate_html: true
+  generate_pdf: false
+  include_plots: true
+  email_notifications: false
+  slack_notifications: false
+  summary_format: "text"  # text, html, json
+
+# Notification settings
+notifications:
+  email:
+    enabled: false
+    recipients: []
+    smtp_server: "localhost"
+    smtp_port: 587
+    smtp_username: ""
+    smtp_password: ""
+    subject_prefix: "[FLOWFINDER Benchmark]"
+    
+  slack:
+    enabled: false
+    webhook_url: null
+    channel: "#benchmarks"
+    username: "FLOWFINDER Bot"
+    icon_emoji: ":chart_with_upwards_trend:"
+
+# Performance monitoring
+monitoring:
+  enable_metrics: true
+  log_performance: true
+  track_memory_usage: false
+  save_intermediate_results: true
+
+# Data validation
+validation:
+  check_input_data: true
+  validate_outputs: true
+  verify_file_integrity: true
+  check_crs_consistency: true
+
+# Error handling
+error_handling:
+  stop_on_critical_error: false
+  log_all_errors: true
+  save_error_context: true
+  max_consecutive_failures: 3
+
+# Resource management
+resources:
+  max_memory_gb: 16
+  max_cpu_percent: 80
+  temp_dir: "temp"
+  cleanup_temp_files: true
+
+# Mountain West specific settings
+mountain_west:
+  states: ["CO", "UT", "NM", "WY", "MT", "ID", "AZ"]
+  elevation_zones:
+    - name: "alpine"
+      min_elevation: 3000
+      max_elevation: 4500
+    - name: "subalpine"
+      min_elevation: 2500
+      max_elevation: 3500
+    - name: "montane"
+      min_elevation: 1500
+      max_elevation: 3000
+    - name: "foothills"
+      min_elevation: 1000
+      max_elevation: 2000
+    - name: "desert"
+      min_elevation: 500
+      max_elevation: 1500
+
+# Quality control thresholds
+quality_control:
+  min_basin_area_km2: 5.0
+  max_basin_area_km2: 500.0
+  min_iou_threshold: 0.8
+  max_runtime_seconds: 300
+  min_truth_polygon_area_km2: 1.0
+  max_centroid_offset_meters: 1000
+
+# Output organization
+outputs:
+  organize_by_date: true
+  include_timestamp: true
+  compress_large_files: true
+  backup_important_files: true
+  archive_old_runs: false
+  max_archive_age_days: 30
+
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "detailed"
+  include_timestamps: true
+  log_to_file: true
+  log_to_console: true
+  max_log_file_size_mb: 100
+  backup_log_files: 5
+
+# Development and testing
+development:
+  debug_mode: false
+  dry_run: false
+  skip_expensive_operations: false
+  use_mock_data: false
+  profile_performance: false 

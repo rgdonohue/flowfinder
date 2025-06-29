@@ -1,0 +1,215 @@
+# FLOWFINDER Basin Sampler Configuration
+# Stratified sampling of watershed basins for accuracy benchmarking
+# Optimized for Mountain West region (CO, UT, NM, WY, MT, ID, AZ)
+
+# =============================================================================
+# DATA PATHS
+# =============================================================================
+
+# Base directory containing input datasets
+# All relative paths are resolved from this directory
+data_dir: data/
+
+# Input file specifications
+# Ensure all files are in the same coordinate reference system
+files:
+  # HUC12 boundaries for Mountain West region
+  # Source: USGS Watershed Boundary Dataset (WBD)
+  # Format: Shapefile with HUC12 codes and state information
+  huc12: huc12_mountain_west.shp
+  
+  # NHD+ HR catchment polygons
+  # Source: USGS National Hydrography Dataset Plus High Resolution
+  # Format: Shapefile with catchment attributes
+  catchments: nhd_hr_catchments.shp
+  
+  # NHD+ HR flowlines
+  # Source: USGS National Hydrography Dataset Plus High Resolution
+  # Format: Shapefile with flowline attributes
+  flowlines: nhd_flowlines.shp
+  
+  # 10m DEM mosaic or tiles
+  # Source: USGS 3D Elevation Program (3DEP)
+  # Format: GeoTIFF with elevation data
+  dem: dem_10m.tif
+  
+  # Optional: Pre-computed slope raster (if not provided, will compute from DEM)
+  # Can significantly speed up processing for large datasets
+  slope: null  # 'slope_10m.tif'
+
+# =============================================================================
+# SAMPLING PARAMETERS
+# =============================================================================
+
+# Basin area range (km²)
+# Mountain West basins typically range from small alpine catchments to large river basins
+# Small: 5-20 km² (headwater catchments)
+# Medium: 20-100 km² (tributary basins)
+# Large: 100-500 km² (mainstem watersheds)
+area_range: [5, 500]
+
+# Snap tolerance for pour points (meters)
+# Distance within which to snap basin centroids to nearest flowline
+# 150m is appropriate for 10m DEM resolution
+snap_tolerance: 150
+
+# Number of basins per stratum (size × terrain × complexity)
+# Total sample size = n_per_stratum × 3(size) × 3(terrain) × 3(complexity) = 54 basins
+# Adjust based on computational resources and desired statistical power
+n_per_stratum: 2
+
+# Mountain West states to include
+# These states represent diverse terrain types from alpine to desert
+# CO: Rocky Mountains, high alpine terrain
+# UT: Wasatch Range, Colorado Plateau, Great Basin
+# NM: Sangre de Cristo Mountains, Rio Grande Valley
+# WY: Wind River Range, Yellowstone Plateau
+# MT: Northern Rockies, Great Plains transition
+# ID: Sawtooth Range, Snake River Plain
+# AZ: Colorado Plateau, Sonoran Desert
+mountain_west_states: ['CO', 'UT', 'NM', 'WY', 'MT', 'ID', 'AZ']
+
+# =============================================================================
+# COORDINATE REFERENCE SYSTEMS
+# =============================================================================
+
+# Target CRS for area calculations (Albers Equal Area CONUS)
+# EPSG:5070 provides equal-area projection for accurate area calculations
+# Covers the entire CONUS including Mountain West region
+target_crs: 'EPSG:5070'
+
+# Output CRS for lat/lon export
+# WGS84 for compatibility with most GIS systems and web mapping
+output_crs: 'EPSG:4326'
+
+# =============================================================================
+# OUTPUT SETTINGS
+# =============================================================================
+
+# Enable/disable output formats
+export:
+  # CSV format for spreadsheet analysis and statistical processing
+  csv: true
+  # GeoPackage format for spatial analysis in GIS software
+  gpkg: true
+  # Text summary for quick review and quality assessment
+  summary: true
+
+# =============================================================================
+# QUALITY CONTROL
+# =============================================================================
+
+# Minimum valid pixels for terrain calculation
+# Ensures sufficient data for reliable slope statistics
+# 10 pixels = 100m² at 10m resolution
+min_valid_pixels: 10
+
+# Maximum snap distance (if exceeded, use centroid)
+# Prevents unrealistic pour point locations
+# 1000m is reasonable for Mountain West basins
+max_snap_distance: 1000
+
+# =============================================================================
+# CLASSIFICATION THRESHOLDS
+# =============================================================================
+
+# Size classification (km²)
+# Based on typical Mountain West basin characteristics
+size_classes:
+  # Small: Headwater catchments, alpine lakes, small tributaries
+  small: [5, 20]
+  # Medium: Major tributaries, medium-sized watersheds
+  medium: [20, 100]
+  # Large: Mainstem watersheds, major river basins
+  large: [100, 500]
+
+# Terrain classification (slope std dev)
+# Calculated as tertiles from the data to ensure balanced sampling
+# Mountain West has extreme terrain variation from flat valleys to steep peaks
+terrain_classes:
+  # Flat: Valley floors, plains, plateaus (≤33rd percentile)
+  flat: '≤33rd percentile'
+  # Moderate: Foothills, moderate slopes (33rd-67th percentile)
+  moderate: '33rd-67th percentile'
+  # Steep: Mountain peaks, canyons, alpine terrain (>67th percentile)
+  steep: '>67th percentile'
+
+# Complexity classification (stream density)
+# Calculated as tertiles from the data
+# Stream density varies from sparse desert washes to dense alpine networks
+complexity_scores:
+  # Low complexity: Sparse drainage networks (≤33rd percentile)
+  1: '≤33rd percentile'
+  # Medium complexity: Moderate drainage density (33rd-67th percentile)
+  2: '33rd-67th percentile'
+  # High complexity: Dense drainage networks (>67th percentile)
+  3: '>67th percentile'
+
+# =============================================================================
+# PROCESSING OPTIONS
+# =============================================================================
+
+# Enable parallel processing (experimental)
+# Useful for large datasets but may cause memory issues
+parallel_processing: false
+max_workers: 4
+
+# Memory management
+# Process basins in chunks to manage memory usage
+# 1000 basins per chunk is reasonable for 8GB RAM
+chunk_size: 1000
+
+# Random seed for reproducible sampling
+# Ensures consistent results across different runs
+# Change this value to get different random samples
+random_seed: 42
+
+# =============================================================================
+# MOUNTAIN WEST SPECIFIC SETTINGS
+# =============================================================================
+
+# Terrain-specific processing options
+terrain_processing:
+  # Enable special handling for alpine terrain (high elevation, steep slopes)
+  handle_alpine: true
+  # Enable special handling for desert terrain (low precipitation, ephemeral streams)
+  handle_desert: true
+  # Enable special handling for plateau terrain (flat tops, steep sides)
+  handle_plateau: true
+
+# Elevation thresholds for Mountain West (meters)
+elevation_thresholds:
+  # Low elevation: Desert and valley floors
+  low: [0, 1500]
+  # Mid elevation: Foothills and plateaus
+  mid: [1500, 3000]
+  # High elevation: Alpine and mountain peaks
+  high: [3000, 4500]
+
+# Climate zone considerations
+climate_zones:
+  # Alpine: High elevation, snow-dominated
+  alpine: true
+  # Semi-arid: Moderate precipitation, seasonal streams
+  semi_arid: true
+  # Arid: Low precipitation, ephemeral streams
+  arid: true
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+
+# Log level (DEBUG, INFO, WARNING, ERROR)
+# DEBUG: Detailed processing information
+# INFO: General progress and summary information
+# WARNING: Non-critical issues that don't stop processing
+# ERROR: Critical issues that may affect results
+log_level: INFO
+
+# Enable verbose output
+# Provides additional detail during processing
+verbose: false
+
+# Save detailed error logs
+# Creates structured error logs for debugging and quality assessment
+save_error_logs: true 

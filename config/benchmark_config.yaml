@@ -1,0 +1,400 @@
+# FLOWFINDER Benchmark Runner Configuration
+# Accuracy testing and performance measurement
+# Optimized for Mountain West region with diverse terrain and climate conditions
+
+# =============================================================================
+# BENCHMARK SETTINGS
+# =============================================================================
+
+# Coordinate reference system for metric calculations
+# EPSG:5070 (NAD83 / CONUS Albers Equal Area) provides equal-area projection
+# Essential for accurate area calculations across the Mountain West region
+projection_crs: 'EPSG:5070'
+
+# Runtime timeout for FLOWFINDER delineation (seconds)
+# 120 seconds allows for complex basins while preventing infinite hangs
+# Mountain West basins can be computationally intensive due to terrain complexity
+timeout_seconds: 120
+
+# =============================================================================
+# ACCURACY THRESHOLDS
+# =============================================================================
+
+# IOU thresholds by terrain class
+# Different terrain types have different accuracy expectations
+# Based on Mountain West terrain characteristics and FLOWFINDER performance
+success_thresholds:
+  # Flat terrain: Valley floors, plains, plateaus (easier to delineate)
+  flat: 0.95
+  # Moderate terrain: Foothills, moderate slopes (moderate difficulty)
+  moderate: 0.92
+  # Steep terrain: Mountain peaks, canyons, alpine (most challenging)
+  steep: 0.85
+  # Default threshold for unclassified terrain
+  default: 0.90
+
+# Centroid offset thresholds by terrain class (meters)
+# Distance between predicted and truth basin centroids
+# Larger thresholds for complex terrain where precise centroid location is less critical
+centroid_thresholds:
+  # Flat terrain: Precise centroid location expected
+  flat: 200
+  # Moderate terrain: Some centroid variation acceptable
+  moderate: 500
+  # Steep terrain: Significant centroid variation acceptable due to terrain complexity
+  steep: 1000
+  # Default threshold for unclassified terrain
+  default: 500
+
+# =============================================================================
+# FLOWFINDER CLI CONFIGURATION
+# =============================================================================
+
+# FLOWFINDER command-line interface settings
+# Configure the FLOWFINDER tool for watershed delineation
+flowfinder_cli:
+  # FLOWFINDER command (adjust if not in PATH)
+  # Ensure FLOWFINDER is installed and accessible
+  command: 'flowfinder'
+  
+  # FLOWFINDER subcommand for delineation
+  # Specific subcommand for watershed delineation
+  subcommand: 'delineate'
+  
+  # Output format for FLOWFINDER results
+  # GeoJSON provides good compatibility with spatial analysis tools
+  output_format: 'geojson'
+  
+  # Additional FLOWFINDER arguments
+  # Add any FLOWFINDER-specific parameters here
+  additional_args: []
+  
+  # Environment variables for FLOWFINDER
+  # Set any required environment variables for FLOWFINDER execution
+  env_vars: {}
+
+# =============================================================================
+# METRIC CALCULATION
+# =============================================================================
+
+# Enable/disable specific metrics
+# Choose which accuracy metrics to calculate
+metrics:
+  # Intersection over Union (primary accuracy metric)
+  iou: true
+  # Boundary length ratio (shape similarity)
+  boundary_ratio: true
+  # Centroid offset (location accuracy)
+  centroid_offset: true
+  # Processing time (performance metric)
+  runtime: true
+
+# IOU calculation settings
+# Configuration for Intersection over Union calculations
+iou_settings:
+  # Use shapely.ops.overlay for robust calculation
+  # Handles complex geometries better than basic intersection
+  use_overlay: true
+  
+  # Handle invalid geometries
+  # Automatically fix geometry issues that could affect IOU calculation
+  make_valid: true
+  
+  # Minimum area for IOU calculation (km²)
+  # Prevents calculation on very small areas that may be noise
+  min_area: 0.001
+
+# Boundary ratio calculation
+# Configuration for boundary length comparison
+boundary_settings:
+  # Smooth boundary before length calculation
+  # Reduces noise in boundary length measurements
+  smooth_boundary: false
+  
+  # Smoothing tolerance (meters)
+  # Distance for boundary smoothing if enabled
+  smooth_tolerance: 10
+
+# Centroid offset calculation
+# Configuration for centroid distance measurements
+centroid_settings:
+  # Use weighted centroid for complex polygons
+  # Accounts for polygon shape when calculating centroid
+  use_weighted_centroid: false
+  
+  # Maximum offset to report (meters)
+  # Caps reported centroid offsets to prevent unrealistic values
+  max_offset: 10000
+
+# =============================================================================
+# PERFORMANCE MONITORING
+# =============================================================================
+
+# Enable performance monitoring
+# Track system resources during benchmark execution
+performance_monitoring:
+  # Track memory usage during processing
+  # Useful for identifying memory bottlenecks
+  track_memory: false
+  
+  # Track CPU usage during processing
+  # Useful for identifying computational bottlenecks
+  track_cpu: false
+  
+  # Save performance logs
+  # Creates detailed performance logs for analysis
+  save_performance_logs: false
+
+# =============================================================================
+# ERROR HANDLING
+# =============================================================================
+
+# Maximum number of retries per basin
+# Allows multiple attempts for basins that fail initial processing
+max_retries: 2
+
+# Retry delay between attempts (seconds)
+# Prevents overwhelming the system with rapid retries
+retry_delay: 5
+
+# Continue processing on individual basin failures
+# Ensures benchmark completes even if some basins fail
+continue_on_failure: true
+
+# =============================================================================
+# OUTPUT SETTINGS
+# =============================================================================
+
+# Output formats
+# Choose which output formats to generate
+output_formats:
+  # JSON format for programmatic access
+  json: true
+  # CSV format for spreadsheet analysis
+  csv: true
+  # Text summary for quick review
+  summary: true
+  # Error logs for debugging
+  errors: true
+
+# JSON output settings
+# Configuration for JSON output format
+json_settings:
+  # Include detailed geometry in JSON
+  # Increases file size but provides complete spatial data
+  include_geometry: false
+  
+  # Pretty print JSON
+  # Makes JSON files human-readable
+  pretty_print: true
+  
+  # Include metadata
+  # Adds configuration and processing metadata to JSON
+  include_metadata: true
+
+# CSV output settings
+# Configuration for CSV output format
+csv_settings:
+  # Include all metrics
+  # Ensures comprehensive data export
+  include_all_metrics: true
+  
+  # Round numeric values
+  # Number of decimal places for numeric values
+  round_decimals: 4
+
+# =============================================================================
+# REPORTING
+# =============================================================================
+
+# Generate detailed performance report
+# Creates comprehensive analysis of benchmark results
+generate_report: true
+
+# Report sections to include
+# Choose which analysis sections to include in the report
+report_sections:
+  # Overall performance statistics
+  overall_performance: true
+  # Performance analysis by terrain type
+  terrain_analysis: true
+  # Performance analysis by basin size
+  size_analysis: true
+  # Analysis of errors and failures
+  error_analysis: true
+  # Key findings and recommendations
+  key_findings: true
+
+# Performance targets for reporting
+# Reference values for performance evaluation
+performance_targets:
+  # Target runtime for FLOWFINDER delineation (seconds)
+  runtime_target: 30
+  # Target IOU for 95th percentile performance
+  iou_target_95: 0.95
+  # Target IOU for 90th percentile performance
+  iou_target_90: 0.90
+
+# =============================================================================
+# VALIDATION
+# =============================================================================
+
+# Validate input data before processing
+# Ensures data quality before starting benchmark
+validate_inputs: true
+
+# Check CRS consistency
+# Verifies coordinate reference systems are compatible
+check_crs: true
+
+# Validate truth polygon quality
+# Ensures truth polygons meet quality standards
+validate_truth: true
+
+# =============================================================================
+# MOUNTAIN WEST SPECIFIC SETTINGS
+# =============================================================================
+
+# Terrain-specific benchmark parameters
+terrain_benchmark:
+  # Alpine terrain: High elevation, complex drainage patterns
+  alpine:
+    # Higher timeout for complex alpine basins
+    timeout_seconds: 180
+    # Lower IOU threshold due to terrain complexity
+    iou_threshold: 0.80
+    # Higher centroid tolerance for steep terrain
+    centroid_tolerance: 1500
+    # Enable special processing for snow-dominated basins
+    snow_processing: true
+  
+  # Desert terrain: Low precipitation, ephemeral streams
+  desert:
+    # Standard timeout for desert basins
+    timeout_seconds: 90
+    # Higher IOU threshold for simpler terrain
+    iou_threshold: 0.90
+    # Lower centroid tolerance for flat terrain
+    centroid_tolerance: 300
+    # Enable special processing for ephemeral streams
+    ephemeral_processing: true
+  
+  # Plateau terrain: Flat tops, steep sides
+  plateau:
+    # Moderate timeout for plateau basins
+    timeout_seconds: 120
+    # Moderate IOU threshold
+    iou_threshold: 0.85
+    # Moderate centroid tolerance
+    centroid_tolerance: 800
+    # Standard processing for plateau terrain
+    plateau_processing: true
+
+# Climate-based adjustments
+climate_adjustments:
+  # Snow-dominated basins (alpine regions)
+  snow_dominated:
+    # Account for seasonal snow cover affecting delineation
+    seasonal_adjustment: true
+    # Higher tolerance for drainage pattern variations
+    pattern_tolerance: 0.3
+  
+  # Ephemeral basins (desert regions)
+  ephemeral:
+    # Account for intermittent stream flow
+    intermittent_flow: true
+    # Lower drainage pattern requirements
+    pattern_tolerance: 0.5
+  
+  # Perennial basins (mountain valleys)
+  perennial:
+    # Standard perennial stream assumptions
+    perennial_flow: true
+    # Standard pattern tolerance
+    pattern_tolerance: 0.2
+
+# Elevation-based adjustments
+elevation_adjustments:
+  # High elevation (>3000m): Alpine and subalpine
+  high_elevation:
+    # Higher complexity allowance for alpine terrain
+    complexity_factor: 1.5
+    # Longer timeout for complex processing
+    timeout_multiplier: 1.5
+  
+  # Mid elevation (1500-3000m): Montane and foothills
+  mid_elevation:
+    # Standard complexity handling
+    complexity_factor: 1.0
+    # Standard timeout
+    timeout_multiplier: 1.0
+  
+  # Low elevation (<1500m): Valleys and plains
+  low_elevation:
+    # Lower complexity allowance for simple terrain
+    complexity_factor: 0.8
+    # Shorter timeout for simple processing
+    timeout_multiplier: 0.8
+
+# =============================================================================
+# DEBUGGING
+# =============================================================================
+
+# Enable debug mode
+# Provides additional debugging information
+debug: false
+
+# Save intermediate results
+# Creates temporary files showing processing steps
+save_intermediate: false
+
+# Export failed cases for inspection
+# Saves basins that fail processing for manual review
+export_failures: true
+
+# Maximum number of failure cases to export
+# Limits output size while providing debugging information
+max_failure_exports: 20
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+
+# Log level (DEBUG, INFO, WARNING, ERROR)
+# DEBUG: Detailed processing information
+# INFO: General progress and summary information
+# WARNING: Non-critical issues that don't stop processing
+# ERROR: Critical issues that may affect results
+log_level: INFO
+
+# Enable verbose output
+# Provides additional detail during processing
+verbose: false
+
+# Save detailed logs
+# Creates comprehensive log files for analysis
+save_detailed_logs: true
+
+# =============================================================================
+# ADVANCED SETTINGS
+# =============================================================================
+
+# Parallel processing (experimental)
+# Enable parallel processing for faster execution
+# May cause memory issues with large datasets
+parallel_processing: false
+max_workers: 1
+
+# Memory management
+# Memory limit for processing (GB)
+# Adjust based on available system memory
+memory_limit_gb: 8
+
+# Progress reporting interval
+# Number of basins between progress updates
+progress_interval: 10
+
+# Save checkpoints for long runs
+# Creates intermediate results for long benchmark runs
+save_checkpoints: false
+checkpoint_interval: 50 
