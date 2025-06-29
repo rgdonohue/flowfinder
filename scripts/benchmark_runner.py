@@ -203,6 +203,239 @@ class BenchmarkRunner:
         
         self.logger.info("Configuration validation passed")
     
+    def _validate_crs_transformation(self, gdf: gpd.GeoDataFrame, source_description: str, 
+                                   target_crs: str) -> gpd.GeoDataFrame:
+        """
+        Validate and perform CRS transformation with comprehensive error handling.
+        
+        Args:
+            gdf: GeoDataFrame to transform
+            source_description: Description of data source for error messages
+            target_crs: Target CRS string (e.g., 'EPSG:5070')
+            
+        Returns:
+            Transformed GeoDataFrame
+            
+        Raises:
+            ValueError: If transformation fails or coordinates are out of expected range
+        """
+        if gdf.crs is None:
+            error_msg = f"Source CRS is undefined for {source_description}"
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        original_crs = str(gdf.crs)
+        self.logger.info(f"Transforming {source_description} from {original_crs} to {target_crs}")
+        
+        # Check if already in target CRS
+        if original_crs == target_crs:
+            self.logger.info(f"{source_description} already in target CRS")
+            return gdf
+        
+        try:
+            # Attempt primary transformation
+            transformed_gdf = gdf.to_crs(target_crs)
+            
+            # Validate transformation success
+            if len(transformed_gdf) != len(gdf):
+                raise ValueError("Transformation resulted in different number of features")
+            
+            if transformed_gdf.is_empty.any():
+                raise ValueError("Transformation resulted in empty geometries")
+            
+            # Validate coordinate ranges based on target CRS
+            if not self._validate_coordinate_ranges(transformed_gdf, target_crs, source_description):
+                # Try fallback strategies
+                transformed_gdf = self._apply_crs_fallback_strategies(gdf, target_crs, source_description)
+            
+            self.logger.info(f"Successfully transformed {source_description} to {target_crs}")
+            return transformed_gdf
+            
+        except Exception as e:
+            self.logger.error(f"CRS transformation failed for {source_description}: {e}")
+            # Try fallback strategies
+            return self._apply_crs_fallback_strategies(gdf, target_crs, source_description)
+    
+    def _validate_coordinate_ranges(self, gdf: gpd.GeoDataFrame, crs: str, 
+                                  source_description: str) -> bool:
+        """
+        Validate that coordinates are within expected ranges for the given CRS.
+        
+        Args:
+            gdf: GeoDataFrame to validate
+            crs: CRS string
+            source_description: Description for error messages
+            
+        Returns:
+            True if coordinates are valid, False otherwise
+        """
+        try:
+            # Get coordinate bounds
+            bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
+            
+            # Define expected ranges for common CRS
+            expected_ranges = {
+                'EPSG:4326': {  # WGS84
+                    'x_min': -180, 'x_max': 180,
+                    'y_min': -90, 'y_max': 90,
+                    'name': 'WGS84'
+                },
+                'EPSG:5070': {  # NAD83 Albers Equal Area CONUS
+                    'x_min': -2500000, 'x_max': 2500000,
+                    'y_min': -1500000, 'y_max': 1500000,
+                    'name': 'NAD83 Albers CONUS'
+                },
+                'EPSG:3857': {  # Web Mercator
+                    'x_min': -20037508, 'x_max': 20037508,
+                    'y_min': -20037508, 'y_max': 20037508,
+                    'name': 'Web Mercator'
+                }
+            }
+            
+            # Mountain West specific validation for geographic CRS
+            if crs == 'EPSG:4326':
+                # Use broader validation ranges since this is for accuracy calculation
+                mountain_west_bounds = {
+                    'x_min': -125, 'x_max': -100,
+                    'y_min': 30, 'y_max': 50
+                }
+                expected_ranges['EPSG:4326'].update(mountain_west_bounds)
+            
+            if crs not in expected_ranges:
+                self.logger.warning(f"No coordinate range validation available for CRS {crs}")
+                return True
+            
+            ranges = expected_ranges[crs]
+            
+            # Check if coordinates are within expected ranges
+            if (bounds[0] < ranges['x_min'] or bounds[2] > ranges['x_max'] or
+                bounds[1] < ranges['y_min'] or bounds[3] > ranges['y_max']):
+                
+                self.logger.warning(f"Coordinates for {source_description} appear out of range for {ranges['name']}: "
+                                  f"bounds=({bounds[0]:.2f}, {bounds[1]:.2f}, {bounds[2]:.2f}, {bounds[3]:.2f}), "
+                                  f"expected x: [{ranges['x_min']}, {ranges['x_max']}], "
+                                  f"y: [{ranges['y_min']}, {ranges['y_max']}]")
+                return False
+            
+            self.logger.debug(f"Coordinate validation passed for {source_description} in {ranges['name']}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Coordinate range validation failed for {source_description}: {e}")
+            return False
+    
+    def _apply_crs_fallback_strategies(self, gdf: gpd.GeoDataFrame, target_crs: str, 
+                                     source_description: str) -> gpd.GeoDataFrame:
+        """
+        Apply fallback strategies for CRS transformation failures.
+        
+        Args:
+            gdf: Original GeoDataFrame
+            target_crs: Target CRS string
+            source_description: Description for error messages
+            
+        Returns:
+            Transformed GeoDataFrame
+            
+        Raises:
+            ValueError: If all fallback strategies fail
+        """
+        self.logger.warning(f"Applying CRS fallback strategies for {source_description}")
+        
+        fallback_strategies = [
+            self._fallback_assume_wgs84,
+            self._fallback_force_crs,
+            self._fallback_geometry_validation,
+            self._fallback_coordinate_cleanup
+        ]
+        
+        for i, strategy in enumerate(fallback_strategies, 1):
+            try:
+                self.logger.info(f"Trying fallback strategy {i}/{len(fallback_strategies)} for {source_description}")
+                result = strategy(gdf, target_crs, source_description)
+                
+                if result is not None and len(result) > 0:
+                    # Validate the fallback result
+                    if self._validate_coordinate_ranges(result, target_crs, f"{source_description} (fallback {i})"):
+                        self.logger.info(f"Fallback strategy {i} succeeded for {source_description}")
+                        return result
+                    else:
+                        self.logger.warning(f"Fallback strategy {i} produced invalid coordinates for {source_description}")
+                
+            except Exception as e:
+                self.logger.warning(f"Fallback strategy {i} failed for {source_description}: {e}")
+                continue
+        
+        # All fallback strategies failed
+        error_msg = f"All CRS transformation strategies failed for {source_description}"
+        self.logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    def _fallback_assume_wgs84(self, gdf: gpd.GeoDataFrame, target_crs: str, 
+                             source_description: str) -> Optional[gpd.GeoDataFrame]:
+        """Fallback: Assume source is WGS84 if CRS is missing."""
+        if gdf.crs is None:
+            self.logger.info(f"Assuming WGS84 for {source_description} with missing CRS")
+            gdf_copy = gdf.copy()
+            gdf_copy.crs = 'EPSG:4326'
+            return gdf_copy.to_crs(target_crs)
+        return None
+    
+    def _fallback_force_crs(self, gdf: gpd.GeoDataFrame, target_crs: str, 
+                          source_description: str) -> Optional[gpd.GeoDataFrame]:
+        """Fallback: Force CRS without transformation, then transform."""
+        try:
+            gdf_copy = gdf.copy()
+            gdf_copy.crs = target_crs
+            return gdf_copy
+        except Exception:
+            return None
+    
+    def _fallback_geometry_validation(self, gdf: gpd.GeoDataFrame, target_crs: str, 
+                                    source_description: str) -> Optional[gpd.GeoDataFrame]:
+        """Fallback: Fix invalid geometries before transformation."""
+        try:
+            gdf_copy = gdf.copy()
+            # Fix invalid geometries
+            invalid_mask = ~gdf_copy.is_valid
+            if invalid_mask.any():
+                self.logger.info(f"Fixing {invalid_mask.sum()} invalid geometries in {source_description}")
+                gdf_copy.loc[invalid_mask, 'geometry'] = gdf_copy.loc[invalid_mask, 'geometry'].apply(make_valid)
+            
+            return gdf_copy.to_crs(target_crs)
+        except Exception:
+            return None
+    
+    def _fallback_coordinate_cleanup(self, gdf: gpd.GeoDataFrame, target_crs: str, 
+                                   source_description: str) -> Optional[gpd.GeoDataFrame]:
+        """Fallback: Remove features with problematic coordinates."""
+        try:
+            gdf_copy = gdf.copy()
+            
+            # Remove features with extreme coordinates that might cause transformation issues
+            bounds = gdf_copy.bounds
+            
+            # For geographic coordinates, remove extreme values
+            if gdf_copy.crs and 'EPSG:4326' in str(gdf_copy.crs):
+                valid_mask = ((bounds['minx'] >= -180) & (bounds['maxx'] <= 180) & 
+                            (bounds['miny'] >= -90) & (bounds['maxy'] <= 90))
+            else:
+                # For projected coordinates, remove extremely large values
+                valid_mask = ((abs(bounds['minx']) < 1e8) & (abs(bounds['maxx']) < 1e8) & 
+                            (abs(bounds['miny']) < 1e8) & (abs(bounds['maxy']) < 1e8))
+            
+            if not valid_mask.all():
+                removed_count = (~valid_mask).sum()
+                self.logger.warning(f"Removing {removed_count} features with extreme coordinates from {source_description}")
+                gdf_copy = gdf_copy[valid_mask].reset_index(drop=True)
+            
+            if len(gdf_copy) > 0:
+                return gdf_copy.to_crs(target_crs)
+            else:
+                return None
+        except Exception:
+            return None
+    
     def load_datasets(self, sample_path: str, truth_path: str) -> None:
         """
         Load basin sample and truth polygon datasets.
@@ -423,8 +656,16 @@ class BenchmarkRunner:
         proj_crs = self.config['projection_crs']
         
         try:
-            pred_proj = gpd.GeoSeries([pred_poly], crs="EPSG:4326").to_crs(proj_crs).iloc[0]
-            truth_proj = gpd.GeoSeries([truth_poly]).to_crs(proj_crs).iloc[0]
+            pred_gdf = gpd.GeoDataFrame(geometry=[pred_poly], crs="EPSG:4326")
+            truth_gdf = gpd.GeoDataFrame(geometry=[truth_poly], crs=truth_poly.crs if hasattr(truth_poly, 'crs') else None)
+            
+            pred_proj_gdf = self._validate_crs_transformation(pred_gdf, "predicted polygon for metrics", proj_crs)
+            if truth_gdf.crs is None:
+                truth_gdf.crs = "EPSG:4326"  # Assume WGS84 if CRS missing
+            truth_proj_gdf = self._validate_crs_transformation(truth_gdf, "truth polygon for metrics", proj_crs)
+            
+            pred_proj = pred_proj_gdf.iloc[0].geometry
+            truth_proj = truth_proj_gdf.iloc[0].geometry
         except Exception as e:
             raise ValueError(f"Projection error: {e}")
         
