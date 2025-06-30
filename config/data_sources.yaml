@@ -1,0 +1,190 @@
+# FLOWFINDER Benchmark Data Sources Configuration
+# ===============================================
+
+# Data source specifications for all required datasets
+
+data_sources:
+  huc12:
+    name: "Watershed Boundary Dataset (HUC12)"
+    source: "USGS"
+    url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/WBD/National/GDB/WBD_National_GDB.zip"
+    format: "shapefile"
+    license: "public_domain"
+    coverage: "national"
+    size_estimate_mb: 500
+    required_fields:
+      - "HUC12"
+      - "NAME"
+      - "AREASQKM"
+      - "STATES"
+    preprocessing:
+      - "filter_mountain_west_states"
+      - "validate_geometry"
+      - "check_area_range"
+      - "standardize_crs"
+    quality_checks:
+      - "geometry_validity"
+      - "attribute_completeness"
+      - "area_range_validation"
+      - "crs_consistency"
+
+  nhd_hr_catchments:
+    name: "NHD+ High Resolution Catchments"
+    source: "USGS"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/NHDPlusHR/Beta/GDB/"
+    format: "geodatabase"
+    license: "public_domain"
+    coverage: "huc4_regions"
+    size_estimate_mb: 2000
+    huc4_regions:
+      - "1301"  # Colorado
+      - "1601"  # Utah
+      - "1302"  # New Mexico
+      - "1002"  # Wyoming
+      - "1001"  # Montana
+      - "1701"  # Idaho
+      - "1501"  # Arizona
+    required_layers:
+      - "CatchmentSP"
+      - "NHDFlowline"
+      - "Flowline"
+    preprocessing:
+      - "extract_catchments"
+      - "extract_flowlines"
+      - "filter_mountain_west"
+      - "validate_relationships"
+    quality_checks:
+      - "layer_completeness"
+      - "geometry_validity"
+      - "spatial_coverage"
+      - "attribute_completeness"
+
+  nhd_hr_flowlines:
+    name: "NHD+ High Resolution Flowlines"
+    source: "USGS"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/NHDPlusHR/Beta/GDB/"
+    format: "geodatabase"
+    license: "public_domain"
+    coverage: "huc4_regions"
+    size_estimate_mb: 1000
+    required_fields:
+      - "COMID"
+      - "GNIS_NAME"
+      - "STREAMORDE"
+      - "STREAMCALC"
+    preprocessing:
+      - "extract_flowlines"
+      - "filter_mountain_west"
+      - "validate_connectivity"
+    quality_checks:
+      - "connectivity_validation"
+      - "attribute_completeness"
+      - "geometry_validity"
+
+  dem_10m:
+    name: "3DEP 10m Digital Elevation Model"
+    source: "USGS 3DEP"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/"
+    format: "geotiff"
+    license: "public_domain"
+    coverage: "1_degree_tiles"
+    size_estimate_mb: 5000
+    resolution_meters: 10
+    required_tiles:
+      - "13/n40w106"  # Colorado
+      - "13/n40w105"  # Colorado
+      - "13/n39w106"  # Colorado
+      - "12/n40w111"  # Utah
+      - "12/n40w110"  # Utah
+      - "13/n35w106"  # New Mexico
+      - "13/n35w105"  # New Mexico
+      - "13/n43w107"  # Wyoming
+      - "13/n43w106"  # Wyoming
+      - "13/n47w110"  # Montana
+      - "13/n47w109"  # Montana
+      - "11/n45w116"  # Idaho
+      - "11/n45w115"  # Idaho
+      - "12/n35w111"  # Arizona
+      - "12/n35w110"  # Arizona
+    preprocessing:
+      - "download_tiles"
+      - "mosaic_tiles"
+      - "validate_resolution"
+      - "check_nodata"
+      - "clip_to_region"
+    quality_checks:
+      - "resolution_validation"
+      - "nodata_handling"
+      - "value_range_check"
+      - "crs_consistency"
+
+# Mountain West region specification
+mountain_west:
+  states:
+    - "CO"  # Colorado
+    - "UT"  # Utah
+    - "NM"  # New Mexico
+    - "WY"  # Wyoming
+    - "MT"  # Montana
+    - "ID"  # Idaho
+    - "AZ"  # Arizona
+  bounding_box:
+    west: -116.0
+    east: -104.0
+    south: 31.0
+    north: 49.0
+  elevation_zones:
+    alpine:
+      min_elevation: 3000
+      max_elevation: 4500
+    subalpine:
+      min_elevation: 2500
+      max_elevation: 3500
+    montane:
+      min_elevation: 1500
+      max_elevation: 3000
+    foothills:
+      min_elevation: 1000
+      max_elevation: 2000
+    desert:
+      min_elevation: 500
+      max_elevation: 1500
+
+# Data processing configuration
+processing:
+  output_crs: "EPSG:4326"
+  target_resolution_meters: 10
+  basin_size_range_km2:
+    min: 5.0
+    max: 500.0
+  quality_thresholds:
+    min_iou: 0.8
+    max_runtime_seconds: 300
+    min_truth_polygon_area_km2: 1.0
+    max_centroid_offset_meters: 1000
+
+# Download configuration
+download:
+  max_concurrent_downloads: 3
+  timeout_seconds: 300
+  retry_attempts: 3
+  verify_ssl: true
+  user_agent: "FLOWFINDER-Benchmark/1.0"
+
+# Storage configuration
+storage:
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  metadata_dir: "data/metadata"
+  temp_dir: "data/temp"
+  max_disk_usage_gb: 50
+  cleanup_temp_files: true
+
+# Validation configuration
+validation:
+  check_geometry_validity: true
+  check_attribute_completeness: true
+  check_spatial_coverage: true
+  check_crs_consistency: true
+  check_value_ranges: true
+  generate_validation_report: true 
