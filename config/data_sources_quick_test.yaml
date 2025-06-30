@@ -1,0 +1,146 @@
+# FLOWFINDER Benchmark Data Sources - Quick Test Configuration
+# ===========================================================
+# Minimal data configuration for quick testing (~10 minutes download)
+
+data_sources:
+  huc12:
+    name: "Watershed Boundary Dataset (HUC12) - Quick Test"
+    source: "USGS"
+    url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/WBD/National/GDB/WBD_National_GDB.zip"
+    format: "shapefile"
+    license: "public_domain"
+    coverage: "colorado_front_range"
+    size_estimate_mb: 50  # Much smaller subset
+    required_fields:
+      - "HUC12"
+      - "NAME"
+      - "AREASQKM"
+      - "STATES"
+    preprocessing:
+      - "filter_colorado_front_range"
+      - "validate_geometry"
+      - "check_area_range"
+      - "standardize_crs"
+    quality_checks:
+      - "geometry_validity"
+      - "attribute_completeness"
+      - "area_range_validation"
+
+  nhd_hr_catchments:
+    name: "NHD+ High Resolution Catchments - Quick Test"
+    source: "USGS"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/NHDPlusHR/Beta/GDB/"
+    format: "geodatabase"
+    license: "public_domain"
+    coverage: "single_huc4"
+    size_estimate_mb: 200  # Single HUC4 region
+    huc4_regions:
+      - "1301"  # Colorado Front Range only
+    required_layers:
+      - "CatchmentSP"
+      - "NHDFlowline"
+    preprocessing:
+      - "extract_catchments"
+      - "extract_flowlines"
+      - "filter_front_range"
+      - "validate_relationships"
+    quality_checks:
+      - "layer_completeness"
+      - "geometry_validity"
+
+  nhd_hr_flowlines:
+    name: "NHD+ High Resolution Flowlines - Quick Test"
+    source: "USGS"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/NHDPlusHR/Beta/GDB/"
+    format: "geodatabase"
+    license: "public_domain"
+    coverage: "single_huc4"
+    size_estimate_mb: 100  # Single HUC4 region
+    required_fields:
+      - "COMID"
+      - "GNIS_NAME"
+      - "STREAMORDE"
+    preprocessing:
+      - "extract_flowlines"
+      - "filter_front_range"
+      - "validate_connectivity"
+    quality_checks:
+      - "connectivity_validation"
+      - "attribute_completeness"
+
+  dem_10m:
+    name: "3DEP 10m Digital Elevation Model - Quick Test"
+    source: "USGS 3DEP"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/"
+    format: "geotiff"
+    license: "public_domain"
+    coverage: "single_tile"
+    size_estimate_mb: 500  # Single 1-degree tile
+    resolution_meters: 10
+    required_tiles:
+      - "13/n40w106"  # Boulder/Denver area only
+    preprocessing:
+      - "download_single_tile"
+      - "validate_resolution"
+      - "check_nodata"
+    quality_checks:
+      - "resolution_validation"
+      - "nodata_handling"
+      - "value_range_check"
+
+# Quick test region specification - Colorado Front Range only
+quick_test_region:
+  name: "Colorado Front Range"
+  states:
+    - "CO"
+  bounding_box:
+    west: -106.0
+    east: -104.5
+    south: 39.5
+    north: 40.5
+  elevation_zones:
+    montane:
+      min_elevation: 1500
+      max_elevation: 3000
+    foothills:
+      min_elevation: 1000
+      max_elevation: 2000
+
+# Data processing configuration for quick test
+processing:
+  output_crs: "EPSG:4326"
+  target_resolution_meters: 10
+  basin_size_range_km2:
+    min: 5.0
+    max: 100.0  # Smaller basins for quick processing
+  quality_thresholds:
+    min_iou: 0.8
+    max_runtime_seconds: 60  # Shorter timeout for quick test
+    min_truth_polygon_area_km2: 1.0
+    max_centroid_offset_meters: 500
+
+# Download configuration optimized for quick test
+download:
+  max_concurrent_downloads: 2  # Fewer concurrent downloads
+  timeout_seconds: 180  # Shorter timeout
+  retry_attempts: 2
+  verify_ssl: true
+  user_agent: "FLOWFINDER-Benchmark-QuickTest/1.0"
+
+# Storage configuration
+storage:
+  raw_data_dir: "data/quick_test/raw"
+  processed_data_dir: "data/quick_test/processed"
+  metadata_dir: "data/quick_test/metadata"
+  temp_dir: "data/quick_test/temp"
+  max_disk_usage_gb: 5  # Much smaller disk usage
+  cleanup_temp_files: true
+
+# Validation configuration for quick test
+validation:
+  check_geometry_validity: true
+  check_attribute_completeness: true
+  check_spatial_coverage: true
+  check_crs_consistency: true
+  check_value_ranges: true
+  generate_validation_report: true 

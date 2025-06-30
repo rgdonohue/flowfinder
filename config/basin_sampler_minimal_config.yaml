@@ -1,0 +1,129 @@
+# FLOWFINDER Basin Sampler Configuration - Minimal Test
+# Minimal stratified sampling for performance testing (5-10 basins)
+
+# =============================================================================
+# DATA PATHS
+# =============================================================================
+
+# Base directory containing input datasets
+data_dir: data/minimal_test/
+
+# Input file specifications
+files:
+  huc12: processed/huc12_minimal.gpkg
+  catchments: null  # Skip for now
+  flowlines: null   # Skip for now  
+  dem: null         # Skip for now
+  slope: null
+
+# =============================================================================
+# SAMPLING PARAMETERS
+# =============================================================================
+
+# Basin area range (km²) - accommodate Boulder County basins  
+area_range: [30, 200]
+
+# Snap tolerance for pour points (meters)
+snap_tolerance: 100
+
+# Number of basins per stratum - minimal sampling
+# Total sample size = n_per_stratum × 2(size) × 2(terrain) × 2(complexity) = 8 basins
+n_per_stratum: 1
+
+# Target single state for minimal test
+mountain_west_states: ['CO']
+
+# =============================================================================
+# COORDINATE REFERENCE SYSTEMS
+# =============================================================================
+
+target_crs: 'EPSG:5070'
+output_crs: 'EPSG:4326'
+
+# =============================================================================
+# OUTPUT SETTINGS
+# =============================================================================
+
+export:
+  csv: true
+  gpkg: true
+  summary: true
+
+# =============================================================================
+# QUALITY CONTROL
+# =============================================================================
+
+min_valid_pixels: 5  # Reduced for small test basins
+max_snap_distance: 500  # Reduced for small area
+
+# =============================================================================
+# CLASSIFICATION THRESHOLDS
+# =============================================================================
+
+# Simplified size classification (km²) - accommodate actual basin sizes  
+size_thresholds:
+  small: 60     # 0-60 km²
+  medium: 120   # 60-120 km²  
+  large: 200    # 120-200 km²
+
+# Terrain classification (slope std dev) - use dummy values since no DEM
+terrain_thresholds:
+  flat: 5       # 0-5
+  moderate: 15  # 5-15
+  steep: 100    # 15+ (since we have no slope data, all will be NaN->flat)
+
+# Complexity classification (stream density) - use dummy values since no flowlines  
+complexity_thresholds:
+  low: 0.1      # 0-0.1
+  medium: 0.5   # 0.1-0.5
+  high: 1.0     # 0.5+ (since we have no stream data, all will be 0->low)
+
+# =============================================================================
+# PROCESSING OPTIONS
+# =============================================================================
+
+parallel_processing: false
+max_workers: 1
+chunk_size: 10  # Process all at once
+random_seed: 42
+
+# =============================================================================
+# MEMORY MANAGEMENT
+# =============================================================================
+
+memory_management:
+  gc_frequency: 5  # Frequent garbage collection
+  max_memory_gb: 2  # Low memory limit for testing
+  enable_profiling: true
+
+# =============================================================================
+# TERRAIN PROCESSING
+# =============================================================================
+
+terrain_processing:
+  handle_alpine: true
+  handle_desert: false
+  handle_plateau: false
+
+elevation_thresholds:
+  low: [1500, 2500]  # Boulder County elevation range
+  high: [2500, 4000]
+
+# =============================================================================
+# QUALITY CHECKS
+# =============================================================================
+
+quality_checks:
+  check_geographic_bounds: false  # Disable for minimal test
+  min_lat: 25.0  
+  max_lat: 50.0
+  min_lon: -125.0
+  max_lon: -100.0
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+
+log_level: DEBUG  # Detailed logging for testing  
+verbose: true
+save_error_logs: true

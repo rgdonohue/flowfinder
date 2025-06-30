@@ -21,15 +21,25 @@ import json
 import yaml
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
-import fiona
-import rasterio
 import pandas as pd
 import numpy as np
 from shapely.geometry import shape
 from shapely.validation import explain_validity
 from jsonschema import validate as jsonschema_validate, ValidationError as JSONSchemaValidationError
 
-# Optional geopandas import
+# Optional imports for geospatial functionality
+try:
+    import fiona
+    FIONA_AVAILABLE = True
+except ImportError:
+    FIONA_AVAILABLE = False
+
+try:
+    import rasterio
+    RASTERIO_AVAILABLE = True
+except ImportError:
+    RASTERIO_AVAILABLE = False
+
 try:
     import geopandas as gpd
     GEOPANDAS_AVAILABLE = True
@@ -67,6 +77,11 @@ def check_shapefile_quality(shapefile_path: str) -> Dict[str, Any]:
         result['issues'].append('File does not exist')
         return result
     result['exists'] = True
+    
+    if not FIONA_AVAILABLE:
+        result['issues'].append('fiona not available - cannot validate shapefile')
+        return result
+    
     try:
         if GEOPANDAS_AVAILABLE:
             gdf = gpd.read_file(shapefile_path)
@@ -126,6 +141,11 @@ def check_raster_quality(raster_path: str) -> Dict[str, Any]:
         result['issues'].append('File does not exist')
         return result
     result['exists'] = True
+    
+    if not RASTERIO_AVAILABLE:
+        result['issues'].append('rasterio not available - cannot validate raster')
+        return result
+    
     try:
         with rasterio.open(raster_path) as src:
             result['crs'] = str(src.crs)

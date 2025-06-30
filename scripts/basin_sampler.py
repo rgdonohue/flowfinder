@@ -91,9 +91,12 @@ class BasinSampler:
             FileNotFoundError: If configuration file doesn't exist
             yaml.YAMLError: If configuration file is invalid
         """
-        self.config = self._load_config(config_path, data_dir)
         self.error_logs: List[Dict[str, Any]] = []
-        self._setup_logging()
+        self._setup_logging()  # Setup logging first
+        self.config = self._load_config(config_path, data_dir)
+        # Update log level from config
+        log_level = getattr(logging, self.config.get('log_level', 'INFO').upper(), logging.INFO)
+        self.logger.setLevel(log_level)
         self._validate_config()
         
         # Initialize data attributes
@@ -236,11 +239,14 @@ class BasinSampler:
             }
         }
         
-        if config_path and Path(config_path).exists():
+        if config_path:
+            cfg_path = Path(config_path)
+            if not cfg_path.exists():
+                raise FileNotFoundError(f"Configuration file not found: {config_path}")
             try:
-                with open(config_path, 'r') as f:
+                with open(cfg_path, 'r') as f:
                     user_config = yaml.safe_load(f)
-                    default_config.update(user_config)
+                default_config.update(user_config or {})
                 self.logger.info(f"Loaded configuration from {config_path}")
             except yaml.YAMLError as e:
                 raise yaml.YAMLError(f"Invalid YAML configuration: {e}")
@@ -251,18 +257,31 @@ class BasinSampler:
     
     def _setup_logging(self) -> None:
         """Configure logging for the sampling session."""
-        log_file = f"basin_sampler_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler(sys.stdout)
-            ]
-        )
+        # Create logger first with basic setup
         self.logger = logging.getLogger(__name__)
-        self.logger.info(f"Logging initialized - log file: {log_file}")
+        
+        # Only configure if not already configured
+        if not self.logger.handlers:
+            log_file = f"basin_sampler_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+            
+            # Set up handlers
+            file_handler = logging.FileHandler(log_file)
+            console_handler = logging.StreamHandler(sys.stdout)
+            
+            # Set format
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+            console_handler.setFormatter(formatter)
+            
+            # Add handlers to logger
+            self.logger.addHandler(file_handler)
+            self.logger.addHandler(console_handler)
+            
+            self.logger.setLevel(logging.INFO)  # Default level, will be updated after config load
+            
+            self.logger.info(f"Logging initialized - log file: {log_file}")
+        else:
+            self.logger.info("Using existing logger configuration")
     
     def _validate_config(self) -> None:
         """
@@ -287,11 +306,25 @@ class BasinSampler:
         if not data_dir.exists():
             raise FileNotFoundError(f"Data directory does not exist: {data_dir}")
         
-        required_files = ['huc12', 'flowlines']
+        required_files = ['huc12']
         for file_key in required_files:
-            file_path = data_dir / self.config['files'][file_key]
+            file_value = self.config['files'][file_key]
+            if file_value is None:
+                raise ValueError(f"Required file '{file_key}' cannot be null")
+            file_path = data_dir / file_value
             if not file_path.exists():
                 raise FileNotFoundError(f"Required file not found: {file_path}")
+        
+        # Check optional files
+        optional_files = ['flowlines', 'catchments', 'dem']
+        for file_key in optional_files:
+            file_value = self.config['files'][file_key]
+            if file_value is not None:
+                file_path = data_dir / file_value
+                if not file_path.exists():
+                    self.logger.warning(f"Optional file not found: {file_path}")
+                else:
+                    self.logger.info(f"Found optional file: {file_path}")
         
         self.logger.info("Configuration validation passed")
     
@@ -1372,19 +1405,32 @@ class BasinSampler:
             return None
         
         try:
+            # Reproject basin geometry to DEM CRS if needed
+            geom = basin_geometry
+            if self.dem and getattr(self, 'huc12', None) is not None and self.huc12.crs and self.dem.crs and str(self.huc12.crs) != str(self.dem.crs):
+                from shapely.geometry import shape, mapping
+                from rasterio.warp import transform_geom
+
+                geom_json = mapping(basin_geometry)
+                geom_transformed = transform_geom(
+                    src_crs=str(self.huc12.crs),
+                    dst_crs=str(self.dem.crs),
+                    geom=geom_json,
+                    precision=6
+                )
+                geom = shape(geom_transformed)
+
             # Check memory before processing
             if not self._check_memory_usage(f"DEM extraction for basin {basin_id}"):
                 self._force_garbage_collection()
-            
+
             # Use chunked processing for large DEMs
             if getattr(self, 'use_chunked_dem_processing', False):
-                return self._extract_dem_data_chunked(basin_geometry, basin_id)
-            else:
-                return self._extract_dem_data_direct(basin_geometry, basin_id)
-                
+                return self._extract_dem_data_chunked(geom, basin_id)
+            return self._extract_dem_data_direct(geom, basin_id)
         except Exception as e:
-            self.logger.warning(f"Failed to extract DEM data for basin {basin_id}: {e}")
-            return None
+            self.logger.error(f"DEM extraction failed for basin {basin_id}: {e}")
+            raise
     
     def _extract_dem_data_direct(self, basin_geometry, basin_id: str) -> Optional[np.ndarray]:
         """Direct DEM extraction for smaller files."""
@@ -1587,7 +1633,13 @@ class BasinSampler:
     
     def _load_flowlines_data(self) -> None:
         """Load NHD+ flowlines for pour point snapping."""
-        flowlines_path = Path(self.config['data_dir']) / self.config['files']['flowlines']
+        flowlines_file = self.config['files']['flowlines']
+        if flowlines_file is None:
+            self.logger.info("Flowlines file not specified, skipping flowlines loading")
+            self.flowlines = None
+            return
+            
+        flowlines_path = Path(self.config['data_dir']) / flowlines_file
         self.logger.info(f"Loading flowlines from {flowlines_path}")
         
         self.flowlines = gpd.read_file(flowlines_path)
@@ -1615,10 +1667,23 @@ class BasinSampler:
         self.flowlines = self._validate_crs_transformation(self.flowlines, "NHD+ flowlines", self.config['target_crs'])
         
         self.logger.info(f"Loaded {len(self.flowlines)} flowlines")
+        # build spatial index once for snapping and complexity queries
+        try:
+            self.flowlines_sindex = self.flowlines.sindex
+            self.logger.debug(f"Spatial index built for {len(self.flowlines)} flowlines")
+        except Exception as e:
+            self.logger.error(f"Failed to build spatial index for flowlines: {e}")
+            raise
     
     def _load_dem_data(self) -> None:
         """Load DEM raster for terrain analysis with memory management."""
-        dem_path = Path(self.config['data_dir']) / self.config['files']['dem']
+        dem_file = self.config['files']['dem']
+        if dem_file is None:
+            self.logger.info("DEM file not specified, skipping DEM loading")
+            self.dem = None
+            return
+            
+        dem_path = Path(self.config['data_dir']) / dem_file
         
         if dem_path.exists():
             self.logger.info(f"Loading DEM from {dem_path}")
@@ -1696,24 +1761,47 @@ class BasinSampler:
             self.huc12 = self.huc12[self.huc12['STATES'].isin(mw_states)]
             self.logger.info(f"State filtering: {len(self.huc12)} basins remaining")
         
-        # Filter by area constraints
-        self.huc12['area_km2'] = self.huc12.geometry.area / 1e6
+        # Filter by area constraints 
+        # Use source AREASQKM if available, otherwise calculate from geometry
+        if 'AREASQKM' in self.huc12.columns:
+            self.logger.debug("Using source AREASQKM column for area filtering")
+            self.huc12['area_km2'] = self.huc12['AREASQKM']
+        else:
+            self.logger.debug("Calculating area from geometry")
+            self.logger.debug(f"Current CRS: {self.huc12.crs}")
+            self.huc12['area_km2'] = self.huc12.geometry.area / 1e6
+        
         area_min, area_max = self.config['area_range']
-        self.huc12 = self.huc12[
-            (self.huc12['area_km2'] >= area_min) & 
-            (self.huc12['area_km2'] <= area_max)
-        ]
+        self.logger.debug(f"Area range: {area_min} - {area_max} km²")
+        self.logger.debug(f"Area values used for filtering: {self.huc12['area_km2'].tolist()}")
+        
+        area_mask = (self.huc12['area_km2'] >= area_min) & (self.huc12['area_km2'] <= area_max)
+        self.logger.debug(f"Area mask: {area_mask.tolist()}")
+        
+        self.huc12 = self.huc12[area_mask]
         self.logger.info(f"Area filtering: {len(self.huc12)} basins remaining")
         
-        # Filter by geographic bounds
-        bounds = self.config['quality_checks']
-        self.huc12 = self.huc12[
-            (self.huc12.geometry.bounds.miny >= bounds['min_lat']) &
-            (self.huc12.geometry.bounds.maxy <= bounds['max_lat']) &
-            (self.huc12.geometry.bounds.minx >= bounds['min_lon']) &
-            (self.huc12.geometry.bounds.maxx <= bounds['max_lon'])
-        ]
-        self.logger.info(f"Geographic filtering: {len(self.huc12)} basins remaining")
+        # Geographic filtering in WGS84 coordinates
+        bounds_cfg = self.config['quality_checks']
+        
+        if bounds_cfg.get('check_geographic_bounds', True):
+            # transform to geographic CRS for lat/lon bounds check
+            try:
+                gdf_geo = self.huc12.to_crs('EPSG:4326')
+            except Exception as e:
+                self.logger.error(f"Failed to project basins to EPSG:4326 for geographic filtering: {e}")
+                raise
+            mask = (
+                (gdf_geo.geometry.bounds.miny >= bounds_cfg['min_lat']) &
+                (gdf_geo.geometry.bounds.maxy <= bounds_cfg['max_lat']) &
+                (gdf_geo.geometry.bounds.minx >= bounds_cfg['min_lon']) &
+                (gdf_geo.geometry.bounds.maxx <= bounds_cfg['max_lon'])
+            )
+            count_before = len(self.huc12)
+            self.huc12 = self.huc12[mask.values]
+            self.logger.info(f"Geographic filtering in WGS84: {len(self.huc12)}/{count_before} basins retained")
+        else:
+            self.logger.info("Geographic filtering disabled in configuration")
         
         # Remove invalid geometries
         valid_mask = self.huc12.geometry.is_valid
@@ -1732,41 +1820,60 @@ class BasinSampler:
         This method calculates the lowest point (pour point) of each basin
         and snaps it to the nearest flowline within the specified tolerance.
         """
-        if self.huc12 is None or self.flowlines is None:
-            raise ValueError("HUC12 and flowlines data must be loaded")
+        if self.huc12 is None:
+            raise ValueError("HUC12 data must be loaded")
+        
+        if self.flowlines is None:
+            self.logger.warning("Flowlines data not available - using basin centroids as pour points")
+            centroids = self.huc12.geometry.centroid
+            self.huc12['pour_point'] = centroids
+            self.logger.info(f"Pour point computation complete: {len(centroids)} centroid points computed")
+            return
         
         self.logger.info("Computing pour points with flowline snapping...")
         
         pour_points = []
         snap_tolerance = self.config['snap_tolerance']
         
-        for idx, basin in tqdm(self.huc12.iterrows(), total=len(self.huc12), desc="Computing pour points"):
-            try:
-                # Find the lowest point of the basin (simplified approach)
-                basin_geom = make_valid(basin.geometry)
-                if basin_geom.is_empty:
-                    continue
-                
-                # Use centroid as initial pour point (simplified)
-                initial_point = basin_geom.centroid
-                
-                # Snap to nearest flowline if within tolerance
-                distances = self.flowlines.geometry.distance(initial_point)
-                min_distance = distances.min()
-                
-                if min_distance <= snap_tolerance:
-                    # Snap to nearest flowline
-                    nearest_idx = distances.idxmin()
-                    nearest_flowline = self.flowlines.loc[nearest_idx].geometry
-                    snapped_point = nearest_flowline.interpolate(nearest_flowline.project(initial_point))
-                    pour_points.append(snapped_point)
-                else:
-                    # Use initial point if no flowline within tolerance
-                    pour_points.append(initial_point)
-                    
-            except Exception as e:
-                self.logger.warning(f"Failed to compute pour point for basin {idx}: {e}")
+        # Vectorize geometry validation and centroid computation
+        valid_geoms = self.huc12.geometry.apply(make_valid)
+        is_empty = valid_geoms.is_empty
+        centroids = valid_geoms.centroid
+        
+        # Log empty geometries
+        empty_count = is_empty.sum()
+        if empty_count > 0:
+            self.logger.warning(f"{empty_count} basins have empty geometries, skipping pour points.")
+        
+        # Process all basins efficiently
+        for idx in tqdm(range(len(self.huc12)), desc="Computing pour points"):
+            basin_row = self.huc12.iloc[idx]
+            basin_id = basin_row.get('HUC12', idx)
+            
+            if is_empty.iloc[idx]:
                 pour_points.append(None)
+                continue
+
+            initial_point = centroids.iloc[idx]
+            try:
+                # Query candidate flowlines via spatial index within tolerance buffer
+                buffer_bounds = initial_point.buffer(snap_tolerance).bounds
+                candidates_idx = list(self.flowlines_sindex.intersection(buffer_bounds))
+                if candidates_idx:
+                    candidates = self.flowlines.iloc[candidates_idx]
+                    distances = candidates.geometry.distance(initial_point)
+                    min_dist = distances.min()
+                    if min_dist <= snap_tolerance:
+                        nearest_idx = distances.idxmin()
+                        fl = self.flowlines.loc[nearest_idx].geometry
+                        snapped = fl.interpolate(fl.project(initial_point))
+                        pour_points.append(snapped)
+                        continue
+                # fallback to centroid if no nearby flowline
+                pour_points.append(initial_point)
+            except Exception as e:
+                self.logger.error(f"Error snapping pour point for basin {basin_id}: {e}")
+                raise
         
         self.huc12['pour_point'] = pour_points
         valid_points = sum(1 for p in pour_points if p is not None)
@@ -1800,32 +1907,32 @@ class BasinSampler:
         memory_config = self.config.get('memory_management', {})
         gc_frequency = memory_config.get('gc_frequency', 10)
         
-        slope_stds = []
+        # Pre-allocate results array for better memory management
+        slope_stds = [np.nan] * len(self.huc12)
         processed_count = 0
         memory_warnings = 0
         
-        for idx, basin in tqdm(self.huc12.iterrows(), total=len(self.huc12), desc="Computing terrain roughness"):
+        # Process basins using integer indexing (faster than iterrows)
+        for idx in tqdm(range(len(self.huc12)), desc="Computing terrain roughness"):
             try:
-                # Get basin ID for logging
-                basin_id = basin.get('HUC12', str(idx))
+                basin_row = self.huc12.iloc[idx]
+                basin_id = basin_row.get('HUC12', str(idx))
                 
                 # Extract DEM data using memory-managed extraction
-                elevation_data = self._extract_dem_data_for_basin(basin.geometry, basin_id)
+                elevation_data = self._extract_dem_data_for_basin(basin_row.geometry, basin_id)
                 
                 if elevation_data is None or elevation_data.size == 0:
-                    slope_stds.append(np.nan)
-                    continue
+                    continue  # slope_stds[idx] is already np.nan
                 
                 # Create valid data mask
                 valid_mask = elevation_data != self.dem.nodata
                 
                 if valid_mask.sum() < 10:  # Need minimum pixels
-                    slope_stds.append(np.nan)
-                    continue
+                    continue  # slope_stds[idx] is already np.nan
                 
                 # Calculate terrain roughness
                 slope_std = self._calculate_terrain_roughness(elevation_data[valid_mask])
-                slope_stds.append(slope_std)
+                slope_stds[idx] = slope_std
                 
                 # Memory management
                 processed_count += 1
@@ -1839,8 +1946,9 @@ class BasinSampler:
                 del elevation_data
                 
             except Exception as e:
+                basin_id = self.huc12.iloc[idx].get('HUC12', str(idx))
                 self.logger.warning(f"Failed to compute terrain roughness for basin {basin_id}: {e}")
-                slope_stds.append(np.nan)
+                # slope_stds[idx] remains np.nan
         
         # Store results
         self.huc12['slope_std'] = slope_stds
@@ -1887,41 +1995,56 @@ class BasinSampler:
         This method calculates the density of flowlines within each basin
         to characterize stream network complexity.
         """
-        if self.huc12 is None or self.flowlines is None:
-            raise ValueError("HUC12 and flowlines data must be loaded")
+        if self.huc12 is None:
+            raise ValueError("HUC12 data must be loaded")
+        
+        if self.flowlines is None:
+            self.logger.warning("Flowlines data not available - setting stream density to 0.0")
+            self.huc12['stream_density'] = 0.0
+            self.logger.info(f"Stream complexity computation complete: {len(self.huc12)} basins processed with 0.0 density")
+            return
         
         self.logger.info("Computing stream complexity...")
         
-        stream_densities = []
+        # Pre-allocate results array and vectorize geometry validation
+        stream_densities = [0.0] * len(self.huc12)
+        valid_geoms = self.huc12.geometry.apply(make_valid)
+        is_empty = valid_geoms.is_empty
+        basin_areas_km2 = valid_geoms.area / 1e6
         
-        for idx, basin in tqdm(self.huc12.iterrows(), total=len(self.huc12), desc="Computing stream complexity"):
+        # Log empty geometries
+        empty_count = is_empty.sum()
+        if empty_count > 0:
+            self.logger.warning(f"{empty_count} basins have empty geometries, setting stream density to 0.0.")
+        
+        # Process basins using integer indexing (faster than iterrows)
+        for idx in tqdm(range(len(self.huc12)), desc="Computing stream complexity"):
+            if is_empty.iloc[idx]:
+                continue  # stream_densities[idx] is already 0.0
+            
+            basin_row = self.huc12.iloc[idx]
+            basin_id = basin_row.get('HUC12', idx)
+            basin_geom = valid_geoms.iloc[idx]
+
             try:
-                basin_geom = make_valid(basin.geometry)
-                if basin_geom.is_empty:
-                    stream_densities.append(0.0)
-                    continue
+                # spatial index to reduce candidate flowlines
+                candidate_idx = list(self.flowlines_sindex.intersection(basin_geom.bounds))
+                if not candidate_idx:
+                    continue  # stream_densities[idx] is already 0.0
                 
-                # Find flowlines within basin
-                intersecting_flowlines = self.flowlines[self.flowlines.intersects(basin_geom)]
-                
-                if len(intersecting_flowlines) == 0:
-                    stream_densities.append(0.0)
-                    continue
-                
-                # Calculate total stream length within basin
-                total_length = 0.0
-                for _, flowline in intersecting_flowlines.iterrows():
-                    intersection = flowline.geometry.intersection(basin_geom)
-                    total_length += intersection.length
-                
-                # Calculate stream density (km/km²)
-                basin_area_km2 = basin_geom.area / 1e6
-                stream_density = total_length / 1000 / basin_area_km2  # Convert to km/km²
-                stream_densities.append(stream_density)
-                
+                candidates = self.flowlines.iloc[candidate_idx]
+                intersects = candidates[candidates.intersects(basin_geom)]
+                if intersects.empty:
+                    continue  # stream_densities[idx] is already 0.0
+
+                # total stream length within basin
+                total_length = intersects.geometry.intersection(basin_geom).length.sum()
+                basin_area_km2 = basin_areas_km2.iloc[idx]
+                stream_density = total_length / 1000 / basin_area_km2
+                stream_densities[idx] = stream_density
             except Exception as e:
-                self.logger.warning(f"Failed to compute stream complexity for basin {idx}: {e}")
-                stream_densities.append(0.0)
+                self.logger.error(f"Error computing stream complexity for basin {basin_id}: {e}")
+                raise
         
         self.huc12['stream_density'] = stream_densities
         self.logger.info(f"Stream complexity computation complete: {len(stream_densities)} basins processed")
@@ -1949,20 +2072,41 @@ class BasinSampler:
         
         # Terrain classification
         terrain_thresholds = self.config['terrain_thresholds']
-        self.huc12['terrain_class'] = pd.cut(
-            self.huc12['slope_std'],
-            bins=[0, terrain_thresholds['flat'], terrain_thresholds['moderate'], float('inf')],
-            labels=['flat', 'moderate', 'steep'],
-            include_lowest=True
-        )
+        self.logger.debug(f"Terrain thresholds: {terrain_thresholds}")
+        self.logger.debug(f"Slope std values: {self.huc12['slope_std'].tolist() if 'slope_std' in self.huc12.columns else 'No slope_std column'}")
         
-        # Complexity classification (tertiles)
-        self.huc12['complexity_score'] = pd.qcut(
-            self.huc12['stream_density'],
-            q=3,
-            labels=[1, 2, 3],
-            duplicates='drop'
-        )
+        # Handle case where slope_std might not exist or be all NaN
+        if 'slope_std' not in self.huc12.columns or self.huc12['slope_std'].isna().all():
+            self.logger.warning("No valid slope_std data - assigning all basins to 'flat' terrain class")
+            self.huc12['terrain_class'] = 'flat'
+        else:
+            self.huc12['terrain_class'] = pd.cut(
+                self.huc12['slope_std'],
+                bins=[0, terrain_thresholds['flat'], terrain_thresholds['moderate'], float('inf')],
+                labels=['flat', 'moderate', 'steep'],
+                include_lowest=True
+            )
+        
+        # Complexity classification
+        complexity_thresholds = self.config.get('complexity_thresholds', {})
+        self.logger.debug(f"Complexity thresholds: {complexity_thresholds}")
+        self.logger.debug(f"Stream density values: {self.huc12['stream_density'].tolist()}")
+        
+        # Handle case where all stream densities are the same (e.g., all 0.0)
+        if self.huc12['stream_density'].nunique() <= 1:
+            self.logger.warning("All stream densities are identical - assigning all basins to 'low' complexity")
+            self.huc12['complexity_score'] = 1
+        else:
+            try:
+                self.huc12['complexity_score'] = pd.qcut(
+                    self.huc12['stream_density'],
+                    q=3,
+                    labels=[1, 2, 3],
+                    duplicates='drop'
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to create complexity quartiles: {e} - assigning all to 'low'")
+                self.huc12['complexity_score'] = 1
         
         self.logger.info("Basin classification complete")
         self.logger.info(f"Size distribution: {self.huc12['size_class'].value_counts().to_dict()}")

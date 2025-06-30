@@ -34,6 +34,9 @@ cp env.example .env
 ```
 
 ### Running the Complete Pipeline
+
+REMEMBER TO TEST WITHIN THE VENV
+
 ```bash
 # Complete orchestrated pipeline
 python run_benchmark.py --output results
@@ -48,6 +51,9 @@ python scripts/benchmark_runner.py --sample basin_sample.csv --truth truth_polyg
 ```
 
 ### Testing & Validation
+
+REMEMBER TO TEST WITHIN THE VENV
+
 ```bash
 # Run all tests
 python -m pytest tests/

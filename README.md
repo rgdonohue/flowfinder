@@ -2,6 +2,8 @@
 
 A rigorous accuracy benchmark for the FLOWFINDER watershed delineation tool, focusing on basins within the Mountain West region of the U.S. This system validates FLOWFINDER's core claims: fast (<30s) delineation and high spatial accuracy (targeting 95% Intersection over Union, or IOU) using 10 m DEM data.
 
+![flow finder](images/flowfinder.png)
+
 ## 🎯 Objectives
 
 - Quantify delineation accuracy across terrain and basin complexity
@@ -85,7 +87,9 @@ python scripts/benchmark_runner.py \
 ├── results/                    # Output directory (gitignored)
 ├── tests/                      # Unit tests
 ├── docs/                       # Documentation
-│   └── benchmark_prd.md       # Product Requirements Document
+│   ├── PRD.md                  # Product Requirements Document
+│   ├── test_coverage/          # Test coverage documentation
+│   └── development/            # Development notes
 │
 └── notebooks/                  # Jupyter exploration
     └── benchmark_analysis.ipynb
@@ -172,7 +176,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 For issues and questions:
 - Check the [documentation](docs/)
-- Review the [PRD](docs/benchmark_prd.md)
+- Review the [PRD](docs/PRD.md)
 - Open an issue on GitHub
 
 ---

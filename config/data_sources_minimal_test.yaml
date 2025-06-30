@@ -1,0 +1,138 @@
+# FLOWFINDER Benchmark Data Sources - Minimal Test Configuration
+# ===============================================================
+# Ultra-minimal data configuration for performance testing (5-10 basins)
+
+data_sources:
+  huc12:
+    name: "Watershed Boundary Dataset (HUC12) - Minimal Test"
+    source: "USGS"
+    url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/WBD/National/GDB/WBD_National_GDB.zip"
+    format: "shapefile"
+    license: "public_domain"
+    coverage: "boulder_county"
+    size_estimate_mb: 10  # Tiny subset
+    required_fields:
+      - "HUC12"
+      - "NAME"
+      - "AREASQKM"
+      - "STATES"
+    preprocessing:
+      - "filter_boulder_county"
+      - "validate_geometry"
+      - "limit_to_10_basins"
+      - "standardize_crs"
+    quality_checks:
+      - "geometry_validity"
+      - "attribute_completeness"
+
+  nhd_hr_catchments:
+    name: "NHD+ High Resolution Catchments - Minimal Test"
+    source: "USGS"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/NHDPlusHR/Beta/GDB/"
+    format: "geodatabase"
+    license: "public_domain"
+    coverage: "boulder_county_only"
+    size_estimate_mb: 50  # Very small subset
+    huc4_regions:
+      - "1301"  # Boulder County area
+    required_layers:
+      - "CatchmentSP"
+      - "NHDFlowline"
+    preprocessing:
+      - "extract_catchments"
+      - "extract_flowlines"
+      - "filter_boulder_county"
+      - "limit_to_test_area"
+    quality_checks:
+      - "layer_completeness"
+      - "geometry_validity"
+
+  nhd_hr_flowlines:
+    name: "NHD+ High Resolution Flowlines - Minimal Test"
+    source: "USGS"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/NHDPlusHR/Beta/GDB/"
+    format: "geodatabase"
+    license: "public_domain"
+    coverage: "boulder_county_only"
+    size_estimate_mb: 25  # Very small subset
+    required_fields:
+      - "COMID"
+      - "GNIS_NAME"
+      - "STREAMORDE"
+    preprocessing:
+      - "extract_flowlines"
+      - "filter_boulder_county"
+      - "limit_to_test_area"
+    quality_checks:
+      - "connectivity_validation"
+      - "attribute_completeness"
+
+  dem_10m:
+    name: "3DEP 10m Digital Elevation Model - Minimal Test"
+    source: "USGS 3DEP"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/"
+    format: "geotiff"
+    license: "public_domain"
+    coverage: "boulder_county_only"
+    size_estimate_mb: 100  # Small area
+    resolution_meters: 10
+    required_tiles:
+      - "13/n40w106"  # Boulder County area
+    preprocessing:
+      - "download_single_tile"
+      - "crop_to_boulder_county"
+      - "validate_resolution"
+    quality_checks:
+      - "resolution_validation"
+      - "nodata_handling"
+
+# Minimal test region specification - Boulder County only
+minimal_test_region:
+  name: "Boulder County, Colorado"
+  states:
+    - "CO"
+  bounding_box:
+    west: -105.7
+    east: -105.0
+    south: 39.9
+    north: 40.3
+  target_basin_count: 10  # Exactly 10 basins for testing
+
+# Data processing configuration for minimal test
+processing:
+  output_crs: "EPSG:4326"
+  target_resolution_meters: 10
+  basin_size_range_km2:
+    min: 5.0
+    max: 50.0  # Small basins only
+  quality_thresholds:
+    min_iou: 0.8
+    max_runtime_seconds: 30  # Very short timeout
+    min_truth_polygon_area_km2: 1.0
+    max_centroid_offset_meters: 200
+
+# Download configuration optimized for minimal test
+download:
+  max_concurrent_downloads: 1  # Single download to avoid issues
+  timeout_seconds: 120
+  retry_attempts: 1
+  verify_ssl: true
+  user_agent: "FLOWFINDER-Benchmark-MinimalTest/1.0"
+
+# Storage configuration
+storage:
+  raw_data_dir: "data/minimal_test/raw"
+  processed_data_dir: "data/minimal_test/processed"
+  metadata_dir: "data/minimal_test/metadata"
+  temp_dir: "data/minimal_test/temp"
+  max_disk_usage_gb: 1  # Minimal disk usage
+  cleanup_temp_files: true
+
+# Validation configuration for minimal test
+validation:
+  check_geometry_validity: true
+  check_attribute_completeness: true
+  check_spatial_coverage: true
+  check_crs_consistency: true
+  check_value_ranges: true
+  generate_validation_report: false  # Skip for speed

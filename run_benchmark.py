@@ -106,13 +106,21 @@ class BenchmarkPipeline:
             FileNotFoundError: If configuration file doesn't exist
             yaml.YAMLError: If configuration file is invalid
         """
-        self.config = self._load_config(config_path)
+        # Set up basic attributes first
         self.results_dir = Path(results_dir)
         self.checkpoint_file = self.results_dir / "pipeline_checkpoint.json"
-        self.pipeline_status = self._initialize_status()
         self.start_time = datetime.now()
         
+        # Load configuration
+        self.config = self._load_config(config_path)
+        
+        # Initialize status
+        self.pipeline_status = self._initialize_status()
+        
+        # Set up logging (after results_dir is available)
         self._setup_logging()
+        
+        # Validate and set up remaining components
         self._validate_config()
         self._setup_signal_handlers()
         
@@ -192,11 +200,12 @@ class BenchmarkPipeline:
                     user_config = yaml.safe_load(f)
                     # Deep merge configuration
                     self._deep_merge(default_config, user_config)
-                self.logger.info(f"Loaded configuration from {config_path}")
+                # Configuration loaded successfully
             except yaml.YAMLError as e:
                 raise yaml.YAMLError(f"Invalid YAML configuration: {e}")
         else:
-            self.logger.info("Using default configuration")
+            # Using default configuration
+            pass
             
         return default_config
     
@@ -345,8 +354,13 @@ class BenchmarkPipeline:
             # Handle relative paths
             if not dep_path.is_absolute():
                 if dep.startswith('data/'):
+                    # Data dependencies: look in configured data directory
+                    dep_path = Path(self.config['pipeline']['data_dir']) / dep_path.name
+                elif stage_name == 'benchmark_execution':
+                    # Benchmark dependencies: look in data directory for input files
                     dep_path = Path(self.config['pipeline']['data_dir']) / dep_path.name
                 else:
+                    # Other dependencies: look in results directory
                     dep_path = self.results_dir / dep_path.name
             
             if not dep_path.exists():
@@ -421,11 +435,18 @@ class BenchmarkPipeline:
             if stage_config.get('config_file'):
                 cmd.extend(['--config', stage_config['config_file']])
             
-            # Add output prefix
-            cmd.extend(['--output', stage_config['output_prefix']])
-            
-            # Add data directory
-            cmd.extend(['--data-dir', self.config['pipeline']['data_dir']])
+            # Add stage-specific arguments
+            if stage_name == 'benchmark_execution':
+                # benchmark_runner.py expects --sample and --truth arguments
+                sample_file = Path(self.config['pipeline']['data_dir']) / 'basin_sample.csv'
+                truth_file = Path(self.config['pipeline']['data_dir']) / 'truth_polygons.gpkg'
+                cmd.extend(['--sample', str(sample_file)])
+                cmd.extend(['--truth', str(truth_file)])
+                cmd.extend(['--output', str(self.results_dir)])
+            else:
+                # Other scripts use --output and --data-dir
+                cmd.extend(['--output', stage_config['output_prefix']])
+                cmd.extend(['--data-dir', self.config['pipeline']['data_dir']])
             
             # Add verbose flag
             cmd.append('--verbose')

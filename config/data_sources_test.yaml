@@ -1,0 +1,158 @@
+# FLOWFINDER Benchmark Data Sources - TEST CONFIGURATION
+# ======================================================
+# Minimal dataset for testing the benchmark system
+# Downloads ~500MB instead of ~7.5GB
+
+data_sources:
+  huc12:
+    name: "Watershed Boundary Dataset (HUC12) - Test"
+    source: "USGS"
+    url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/WBD/National/GDB/WBD_National_GDB.zip"
+    format: "shapefile"
+    license: "public_domain"
+    coverage: "national"
+    size_estimate_mb: 500
+    required_fields:
+      - "HUC12"
+      - "NAME"
+      - "AREASQKM"
+      - "STATES"
+    preprocessing:
+      - "filter_mountain_west_states"
+      - "validate_geometry"
+      - "check_area_range"
+      - "standardize_crs"
+    quality_checks:
+      - "geometry_validity"
+      - "attribute_completeness"
+      - "area_range_validation"
+      - "crs_consistency"
+
+  nhd_hr_catchments:
+    name: "NHD+ High Resolution Catchments - Test"
+    source: "USGS"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/NHDPlusHR/Beta/GDB/"
+    format: "geodatabase"
+    license: "public_domain"
+    coverage: "huc4_regions"
+    size_estimate_mb: 200
+    # TEST: Only download 1 HUC4 region (Colorado Front Range)
+    huc4_regions:
+      - "1301"  # Colorado Front Range only
+    required_layers:
+      - "CatchmentSP"
+      - "NHDFlowline"
+      - "Flowline"
+    preprocessing:
+      - "extract_catchments"
+      - "extract_flowlines"
+      - "filter_mountain_west"
+      - "validate_relationships"
+    quality_checks:
+      - "layer_completeness"
+      - "geometry_validity"
+      - "spatial_coverage"
+      - "attribute_completeness"
+
+  nhd_hr_flowlines:
+    name: "NHD+ High Resolution Flowlines - Test"
+    source: "USGS"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/NHDPlusHR/Beta/GDB/"
+    format: "geodatabase"
+    license: "public_domain"
+    coverage: "huc4_regions"
+    size_estimate_mb: 100
+    required_fields:
+      - "COMID"
+      - "GNIS_NAME"
+      - "STREAMORDE"
+      - "STREAMCALC"
+    preprocessing:
+      - "extract_flowlines"
+      - "filter_mountain_west"
+      - "validate_connectivity"
+    quality_checks:
+      - "connectivity_validation"
+      - "attribute_completeness"
+      - "geometry_validity"
+
+  dem_10m:
+    name: "3DEP 10m Digital Elevation Model - Test"
+    source: "USGS 3DEP"
+    base_url: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/"
+    format: "geotiff"
+    license: "public_domain"
+    coverage: "1_degree_tiles"
+    size_estimate_mb: 200
+    resolution_meters: 10
+    # TEST: Only download 2 DEM tiles for Colorado Front Range
+    required_tiles:
+      - "13/n40w106"  # Boulder/Denver area
+      - "13/n40w105"  # Fort Collins area
+    preprocessing:
+      - "download_tiles"
+      - "mosaic_tiles"
+      - "validate_resolution"
+      - "check_nodata"
+      - "clip_to_region"
+    quality_checks:
+      - "resolution_validation"
+      - "nodata_handling"
+      - "value_range_check"
+      - "crs_consistency"
+
+# Mountain West region specification - TEST AREA
+mountain_west:
+  states:
+    - "CO"  # Colorado only for testing
+  bounding_box:
+    west: -106.0
+    east: -104.0
+    south: 39.0
+    north: 41.0
+  elevation_zones:
+    montane:
+      min_elevation: 1500
+      max_elevation: 3000
+    foothills:
+      min_elevation: 1000
+      max_elevation: 2000
+
+# Data processing configuration - TEST SETTINGS
+processing:
+  output_crs: "EPSG:4326"
+  target_resolution_meters: 10
+  basin_size_range_km2:
+    min: 5.0
+    max: 100.0  # Smaller max for testing
+  quality_thresholds:
+    min_iou: 0.8
+    max_runtime_seconds: 300
+    min_truth_polygon_area_km2: 1.0
+    max_centroid_offset_meters: 1000
+
+# Download configuration - TEST SETTINGS
+download:
+  max_concurrent_downloads: 2  # Reduced for testing
+  timeout_seconds: 300
+  retry_attempts: 3
+  verify_ssl: true
+  user_agent: "FLOWFINDER-Benchmark-Test/1.0"
+
+# Storage configuration - TEST SETTINGS
+storage:
+  raw_data_dir: "data/test/raw"
+  processed_data_dir: "data/test/processed"
+  metadata_dir: "data/test/metadata"
+  temp_dir: "data/test/temp"
+  max_disk_usage_gb: 5  # Reduced for testing
+  cleanup_temp_files: true
+
+# Validation configuration
+validation:
+  check_geometry_validity: true
+  check_attribute_completeness: true
+  check_spatial_coverage: true
+  check_crs_consistency: true
+  check_value_ranges: true
+  generate_validation_report: true 
