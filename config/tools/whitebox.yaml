@@ -1,0 +1,18 @@
+tool:
+  executable: whitebox_tools
+  timeout_seconds: 150
+  environment_variables: {}
+  additional_args:
+    - "--verbose"
+
+benchmark:
+  success_thresholds:
+    flat: 0.91
+    moderate: 0.87
+    steep: 0.79
+
+algorithms:
+  flow_direction: D8Pointer
+  flow_accumulation: D8FlowAccumulation
+  watershed: Watershed
+  depression_filling: FillDepressions

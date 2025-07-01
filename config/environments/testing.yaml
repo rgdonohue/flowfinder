@@ -1,0 +1,7 @@
+benchmark:
+  output_formats:
+  - json
+  timeout_seconds: 30
+performance:
+  max_workers: 2
+  parallel_processing: true

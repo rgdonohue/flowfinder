@@ -1,0 +1,13 @@
+benchmark:
+  output_formats:
+  - json
+  - csv
+  - summary
+  - errors
+  timeout_seconds: 300
+logging:
+  level: WARNING
+performance:
+  max_workers: 8
+  memory_limit_gb: 16
+  parallel_processing: true

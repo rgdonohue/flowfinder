@@ -1,0 +1,10 @@
+benchmark:
+  success_thresholds:
+    flat: 0.93
+    moderate: 0.9
+    steep: 0.82
+tool:
+  environment_variables:
+    TAUDEM_DIR: /opt/taudem
+  executable: aread8
+  timeout_seconds: 180

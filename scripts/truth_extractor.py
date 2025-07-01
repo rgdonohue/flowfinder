@@ -228,15 +228,15 @@ class TruthExtractor:
         
         if config_path and Path(config_path).exists():
             try:
-                with open(config_path, 'r') as f:
-                    user_config = yaml.safe_load(f)
-                    default_config.update(user_config)
+            with open(config_path, 'r') as f:
+                user_config = yaml.safe_load(f)
+                default_config.update(user_config)
                 self.logger.info(f"Loaded configuration from {config_path}")
             except yaml.YAMLError as e:
                 raise yaml.YAMLError(f"Invalid YAML configuration: {e}")
         else:
             self.logger.info("Using default configuration")
-            
+                
         return default_config
     
     def _setup_logging(self) -> None:
@@ -871,7 +871,7 @@ class TruthExtractor:
                     if not self._validate_flowlines_schema(self.flowlines):
                         if self.config.get('memory_management', {}).get('fail_on_validation_errors', False):
                             raise ValueError("NHD+ flowlines failed schema validation")
-                        else:
+            else:
                             self.logger.warning("NHD+ flowlines schema validation failed - proceeding with caution")
                     
                     self.logger.info(f"Loaded {len(self.flowlines)} flowlines")
@@ -1016,10 +1016,10 @@ class TruthExtractor:
                 
                 elif strategy == 'nearest_centroid':
                     # Choose nearest catchment by centroid distance
-                    distances = intersecting.geometry.centroid.distance(basin.geometry)
-                    nearest_idx = distances.idxmin()
-                    truth_poly = intersecting.loc[nearest_idx].copy()
-                    truth_poly['extraction_method'] = 'nearest_centroid'
+                        distances = intersecting.geometry.centroid.distance(basin.geometry)
+                        nearest_idx = distances.idxmin()
+                        truth_poly = intersecting.loc[nearest_idx].copy()
+                        truth_poly['extraction_method'] = 'nearest_centroid'
                     self._log_error(basin_id, 'point_not_contained', "Pour point not contained in any catchment")
                     return truth_poly
                 
@@ -1029,7 +1029,7 @@ class TruthExtractor:
                     truth_poly = intersecting.loc[largest_idx].copy()
                     truth_poly['extraction_method'] = 'largest_intersecting'
                     return truth_poly
-                    
+                
             except Exception as e:
                 self.logger.warning(f"Strategy {strategy} failed for basin {basin_id}: {e}")
                 continue
@@ -1065,7 +1065,7 @@ class TruthExtractor:
             validation_detail = {'basin_id': basin_id, 'issues': []}
             
             try:
-                # Topology validation
+            # Topology validation
                 if quality_checks['topology_validation']:
                     if not row.geometry.is_valid:
                         validation_detail['issues'].append('invalid_topology')
@@ -1073,17 +1073,17 @@ class TruthExtractor:
                     elif row.geometry.is_empty:
                         validation_detail['issues'].append('empty_geometry')
                         validation_results['completeness_issues'] += 1
-                
-                # Area validation
+            
+            # Area validation
                 if quality_checks['area_validation']:
                     truth_area = row['truth_area_km2']
                     sample_area = row['sample_area_km2']
                     
                     if not np.isnan(sample_area) and sample_area > 0:
                         area_ratio = truth_area / sample_area
-                        min_ratio = self.config['min_area_ratio']
-                        max_ratio = self.config['max_area_ratio']
-                        
+                min_ratio = self.config['min_area_ratio']
+                max_ratio = self.config['max_area_ratio']
+                
                         if area_ratio < min_ratio or area_ratio > max_ratio:
                             validation_detail['issues'].append(f'area_ratio_violation_{area_ratio:.2f}')
                             validation_results['area_ratio_violations'] += 1
@@ -1199,7 +1199,7 @@ class TruthExtractor:
                 for method, count in method_counts.items():
                     f.write(f"  {method}: {count}\n")
                 f.write("\n")
-            
+                
             # Area statistics
             if 'truth_area_km2' in self.truth_polygons.columns:
                 areas = self.truth_polygons['truth_area_km2']
@@ -1319,7 +1319,7 @@ def create_sample_config() -> str:
     
     config_content = yaml.dump(sample_config, default_flow_style=False, indent=2)
     return config_content
-
+    
 
 def main() -> None:
     """Main CLI entry point for truth extraction."""

@@ -1,0 +1,12 @@
+benchmark:
+  success_thresholds:
+    flat: 0.97
+    moderate: 0.94
+    steep: 0.88
+tool:
+  additional_args:
+  - --verbose
+  environment_variables:
+    FLOWFINDER_CACHE_DIR: /tmp/flowfinder_cache
+  executable: flowfinder
+  timeout_seconds: 120

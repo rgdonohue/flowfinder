@@ -1,0 +1,19 @@
+tool:
+  executable: grass
+  timeout_seconds: 180
+  environment_variables:
+    GRASS_MESSAGE_FORMAT: plain
+  additional_args:
+    - "--text"
+
+benchmark:
+  success_thresholds:
+    flat: 0.92
+    moderate: 0.89
+    steep: 0.80
+
+algorithms:
+  watershed_module: r.watershed
+  flow_direction: r.flow
+  flow_accumulation: r.watershed
+  stream_extraction: r.stream.extract

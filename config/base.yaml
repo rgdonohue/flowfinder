@@ -1,0 +1,24 @@
+benchmark:
+  metrics:
+    boundary_ratio: true
+    centroid_offset: true
+    iou: true
+    runtime: true
+  output_formats:
+  - json
+  - csv
+  - summary
+  success_thresholds:
+    default: 0.9
+    flat: 0.95
+    moderate: 0.92
+    steep: 0.85
+  timeout_seconds: 120
+coordinate_systems:
+  input_crs: EPSG:4326
+  output_crs: EPSG:4326
+  processing_crs: EPSG:5070
+performance:
+  max_workers: 4
+  memory_limit_gb: 8
+  parallel_processing: false

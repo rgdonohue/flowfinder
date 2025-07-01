@@ -1,0 +1,7 @@
+benchmark:
+  output_formats:
+  - json
+  - summary
+  timeout_seconds: 60
+logging:
+  level: DEBUG
