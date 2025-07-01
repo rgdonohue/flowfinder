@@ -1,28 +1,33 @@
-# FLOWFINDER: Next-Generation Watershed Delineation with Unprecedented Reliability
+# FLOWFINDER: Watershed Delineation Research & Benchmark Framework
 
-A comprehensive watershed delineation tool and benchmark framework designed to establish new standards in accuracy, reliability, and systematic comparison. FLOWFINDER combines production-ready watershed delineation capabilities with the first standardized multi-tool benchmark framework for the hydrology research community.
+A research project exploring watershed delineation accuracy and developing systematic comparison methods for hydrological analysis tools. This work addresses key challenges in watershed delineation: reliability validation, systematic benchmarking, and geographic specialization for complex terrain.
 
 ![flow finder](images/flowfinder.png)
 
-## 🎯 Strategic Vision
+## 🎯 Research Questions
 
-**"Next-Generation Watershed Delineation with Unprecedented Reliability"**
+**What problems are we trying to solve?**
 
-FLOWFINDER represents a breakthrough in watershed delineation technology, achieving **100% validation success (51/51 checks)** while providing the first comprehensive benchmark framework for systematic tool comparison. Our mission is to establish new standards in watershed delineation through:
+1. **Reliability Gap**: How can we systematically validate watershed delineation tools across diverse terrain types?
+2. **Benchmarking Gap**: Why is there no standardized framework for comparing watershed delineation tools?
+3. **Geographic Bias**: How do existing tools perform in Mountain West terrain compared to other regions?
+4. **Reproducibility Crisis**: How can we ensure watershed delineation results are reproducible and comparable?
 
-- **Production-ready tool** with unprecedented reliability validation
-- **Comprehensive benchmark framework** for systematic multi-tool comparison
-- **Mountain West terrain specialization** addressing geographic research gaps
-- **Academic credibility** through rigorous validation and peer-reviewed methodology
+**Our approach**: Develop FLOWFINDER as both a research tool and benchmark framework to systematically investigate these questions.
 
-## 🏆 Key Differentiators
+## 🔬 Research Context
 
-| Aspect | FLOWFINDER | TauDEM | GRASS GIS | WhiteboxTools |
-|--------|------------|--------|-----------|---------------|
-| **Reliability** | 100% validation (51/51) | Variable | Variable | Variable |
-| **Benchmark Integration** | Native framework | External tools needed | Complex setup | Command-line focused |
-| **Mountain West Focus** | Optimized | General purpose | General purpose | General purpose |
-| **Modern Architecture** | Python + validation | MPI/C++ | C/Module system | Rust |
+### Current State of Watershed Delineation
+- **Tool proliferation**: Multiple tools (TauDEM, GRASS, WhiteboxTools) with different algorithms
+- **Validation challenges**: Limited systematic comparison of accuracy and performance
+- **Geographic bias**: Most studies focus on eastern US or international basins
+- **Reproducibility issues**: Ad-hoc validation methods make results hard to compare
+
+### Research Gaps We're Addressing
+- **Systematic benchmarking**: No standardized framework for multi-tool comparison
+- **Mountain West terrain**: Limited research on complex terrain performance
+- **Reliability metrics**: Need for consistent validation across tools
+- **Open methodology**: Reproducible research practices for watershed analysis
 
 ## 📋 Prerequisites
 
@@ -55,7 +60,7 @@ cp .env.example .env
 
 ### 2. Configuration Setup
 
-The system uses a hierarchical configuration architecture:
+The system uses a hierarchical configuration architecture to manage complexity:
 
 ```bash
 # Create configuration structure
@@ -102,7 +107,7 @@ python scripts/benchmark_runner.py \
     --outdir results/
 ```
 
-### 5. Run Multi-Tool Comparison
+### 5. Run Multi-Tool Comparison (Experimental)
 
 ```bash
 # Using the new configuration system
@@ -146,13 +151,13 @@ python scripts/benchmark_runner_integrated.py \
 ├── data/                       # Input datasets (gitignored)
 ├── results/                    # Output directory (gitignored)
 ├── tests/                      # Unit tests
-├── docs/                       # Strategic and technical documentation
-│   ├── strategic_analysis_implementation_roadmap_v2.md # Strategic roadmap
-│   ├── multi_tool_integration_strategy.md # Integration strategy
-│   ├── strategic_analysis_assessment.md # Strategic evaluation
+├── docs/                       # Research and technical documentation
+│   ├── strategic_analysis_implementation_roadmap_v2.md # Research roadmap
+│   ├── multi_tool_integration_strategy.md # Integration approach
+│   ├── strategic_analysis_assessment.md # Research evaluation
 │   ├── immediate_next_steps.md # Implementation priorities
 │   ├── configuration_architecture.md # Configuration system design
-│   ├── multi_tool_benchmark_architecture.md # Multi-tool framework
+│   ├── multi_tool_benchmark_architecture.md # Framework design
 │   └── test_coverage/          # Test coverage documentation
 │
 └── notebooks/                  # Jupyter exploration
@@ -161,7 +166,7 @@ python scripts/benchmark_runner_integrated.py \
 
 ## 🔧 Configuration Architecture
 
-The system uses a **hierarchical configuration architecture** with inheritance:
+The system uses a **hierarchical configuration architecture** to manage complexity across different tools and environments:
 
 ### Configuration Hierarchy
 ```
@@ -199,45 +204,45 @@ class ToolAdapter(ABC):
         pass
 ```
 
-## 📊 Outputs
+## 📊 Research Outputs
 
 ### Single-Tool Benchmark
 - `benchmark_results.json`: Detailed per-basin metrics
 - `accuracy_summary.csv`: Tabular results for analysis
 - `benchmark_summary.txt`: Performance analysis and key findings
 
-### Multi-Tool Comparison
+### Multi-Tool Comparison (Experimental)
 - `multi_tool_results.json`: Comparative analysis across tools
 - `performance_comparison.csv`: Runtime and memory comparisons
 - `statistical_analysis.csv`: ANOVA, Tukey HSD, Kruskal-Wallis results
-- `publication_figures/`: Publication-ready charts and graphs
+- `publication_figures/`: Research-ready charts and graphs
 
-## 🎯 Success Metrics
+## 🎯 Research Metrics
 
-### Technical Metrics
-| Metric                    | Target                           |
-| ------------------------- | -------------------------------- |
-| FLOWFINDER IOU (mean)     | ≥ 0.90                           |
-| FLOWFINDER IOU (90th percentile) | ≥ 0.95                       |
-| Runtime (mean)            | ≤ 30 s                           |
-| Configuration redundancy  | 90% reduction                    |
-| Tool integration success  | 4 major tools integrated         |
+### Technical Validation
+| Metric                    | Current Target                    | Status |
+| ------------------------- | --------------------------------- | ------ |
+| FLOWFINDER IOU (mean)     | ≥ 0.90                           | 🔄 In Progress |
+| FLOWFINDER IOU (90th percentile) | ≥ 0.95                       | 🔄 In Progress |
+| Runtime (mean)            | ≤ 30 s                           | 🔄 In Progress |
+| Configuration redundancy  | 90% reduction                    | ✅ Achieved |
+| Tool integration success  | 4 major tools integrated         | 🔄 In Progress |
 
-### Academic Metrics
-| Metric                    | Target                           |
-| ------------------------- | -------------------------------- |
-| Peer-reviewed publications | 2+ papers accepted               |
-| Conference presentations  | 5+ presentations                 |
-| Citations (2 years)       | 100+ citations                   |
-| Framework adoption        | 3+ external research groups      |
+### Research Impact Goals
+| Metric                    | Target                           | Status |
+| ------------------------- | --------------------------------- | ------ |
+| Peer-reviewed publications | 2+ papers submitted              | 🔄 In Progress |
+| Conference presentations  | 5+ presentations                 | 🔄 In Progress |
+| Citations (2 years)       | 100+ citations                   | 🔄 In Progress |
+| Framework adoption        | 3+ external research groups      | 🔄 In Progress |
 
-### Community Metrics
-| Metric                    | Target                           |
-| ------------------------- | -------------------------------- |
-| GitHub stars              | 500+ stars                       |
-| FLOWFINDER downloads      | 1000+ downloads                  |
-| External contributors     | 10+ contributors                 |
-| Institutional adoptions   | 5+ adoptions                     |
+### Community Engagement Goals
+| Metric                    | Target                           | Status |
+| ------------------------- | --------------------------------- | ------ |
+| GitHub stars              | 500+ stars                       | 🔄 In Progress |
+| FLOWFINDER downloads      | 1000+ downloads                  | 🔄 In Progress |
+| External contributors     | 10+ contributors                 | 🔄 In Progress |
+| Institutional adoptions   | 5+ adoptions                     | 🔄 In Progress |
 
 ## 🧪 Testing
 
@@ -266,33 +271,33 @@ jupyter lab notebooks/
 # Open benchmark_analysis.ipynb for interactive exploration
 ```
 
-## 🎯 Strategic Roadmap
+## 🎯 Research Roadmap
 
-### Phase 1: Foundation (Months 1-3) - CRITICAL
+### Phase 1: Foundation (Months 1-3) - IN PROGRESS
 - ✅ **Configuration Architecture**: Hierarchical system implemented
-- ✅ **FLOWFINDER Production**: 51/51 validation success achieved
-- 🔄 **Benchmark Framework MVP**: Multi-tool comparison operational
-- 🔄 **Research Foundation**: Literature review and gap analysis
+- ✅ **FLOWFINDER Development**: Core tool with validation framework
+- 🔄 **Benchmark Framework MVP**: Multi-tool comparison development
+- 🔄 **Literature Review**: Research gap analysis and methodology development
 
-### Phase 2: Tool Integration (Months 4-8) - HIGH PRIORITY
+### Phase 2: Tool Integration (Months 4-8) - PLANNED
 - 🔄 **WhiteboxTools Integration**: Rust-based performance comparison
 - 🔄 **TauDEM Integration**: Academic gold standard validation
 - 🔄 **GRASS GIS Integration**: Comprehensive hydrological suite
 - 🔄 **SAGA GIS Integration**: European academic adoption
 
-### Phase 3: Academic Impact (Months 9-12) - HIGH IMPACT
+### Phase 3: Research Publication (Months 9-12) - PLANNED
 - 🔄 **Comprehensive Benchmarking**: 25+ watersheds across terrain types
-- 🔄 **Statistical Analysis**: Publication-ready comparative results
+- 🔄 **Statistical Analysis**: Research-ready comparative results
 - 🔄 **Community Building**: Open source release and adoption
 - 🔄 **Academic Publications**: Peer-reviewed papers and presentations
 
 ## 📚 Documentation
 
-### Strategic Documents
-- **[Strategic Roadmap](docs/strategic_analysis_implementation_roadmap_v2.md)**: Complete implementation plan with checkpoints
+### Research Documents
+- **[Research Roadmap](docs/strategic_analysis_implementation_roadmap_v2.md)**: Implementation plan with research milestones
 - **[Multi-Tool Integration Strategy](docs/multi_tool_integration_strategy.md)**: Research-based tool integration approach
-- **[Strategic Assessment](docs/strategic_analysis_assessment.md)**: Comprehensive strategic evaluation
-- **[Immediate Next Steps](docs/immediate_next_steps.md)**: Actionable implementation priorities
+- **[Research Assessment](docs/strategic_analysis_assessment.md)**: Comprehensive research evaluation
+- **[Next Steps](docs/immediate_next_steps.md)**: Implementation priorities
 
 ### Technical Documents
 - **[Configuration Architecture](docs/configuration_architecture.md)**: Hierarchical configuration system design
@@ -301,10 +306,12 @@ jupyter lab notebooks/
 
 ## 🤝 Contributing
 
+We welcome contributions from the research community:
+
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
+2. Create a feature branch (`git checkout -b feature/research-improvement`)
+3. Commit your changes (`git commit -m 'Add research improvement'`)
+4. Push to the branch (`git push origin feature/research-improvement`)
 5. Open a Pull Request
 
 ## 📄 License
@@ -316,18 +323,18 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - USGS for NHD+ HR and 3DEP data
 - FLOWFINDER development team
 - Open source geospatial community
-- Academic research community for validation and feedback
+- Academic research community for feedback and validation
 
 ## 📞 Support
 
-For issues and questions:
+For research questions and technical issues:
 - Check the [documentation](docs/)
-- Review the [Strategic Roadmap](docs/strategic_analysis_implementation_roadmap_v2.md)
+- Review the [Research Roadmap](docs/strategic_analysis_implementation_roadmap_v2.md)
 - See the [Multi-Tool Integration Strategy](docs/multi_tool_integration_strategy.md)
 - Open an issue on GitHub
 
 ---
 
-*"Reliability earns trust. Systematic comparison drives innovation."*
+*"Research is formalized curiosity. It is poking and prying with a purpose."*
 
-**FLOWFINDER: Establishing new standards in watershed delineation through unprecedented reliability and comprehensive benchmarking.** 
+**FLOWFINDER: Exploring watershed delineation accuracy and developing systematic comparison methods for hydrological research.** 
