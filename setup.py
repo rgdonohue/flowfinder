@@ -10,14 +10,14 @@ from setuptools import setup, find_packages
 from pathlib import Path
 
 # Read README
-readme_path = Path(__file__).parent.parent / "README.md"
+readme_path = Path(__file__).parent / "README.md"
 long_description = ""
 if readme_path.exists():
     with open(readme_path, "r", encoding="utf-8") as f:
         long_description = f.read()
 
 # Read requirements
-requirements_path = Path(__file__).parent.parent / "requirements.txt"
+requirements_path = Path(__file__).parent / "requirements.txt"
 install_requires = []
 if requirements_path.exists():
     with open(requirements_path, "r") as f:

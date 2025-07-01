@@ -88,6 +88,7 @@ python scripts/benchmark_runner.py \
 ├── tests/                      # Unit tests
 ├── docs/                       # Documentation
 │   ├── PRD.md                  # Product Requirements Document
+│   ├── multi_tool_benchmark_architecture.md  # Multi-tool comparison framework
 │   ├── test_coverage/          # Test coverage documentation
 │   └── development/            # Development notes
 │
@@ -177,6 +178,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 For issues and questions:
 - Check the [documentation](docs/)
 - Review the [PRD](docs/PRD.md)
+- See the [Multi-Tool Benchmark Architecture](docs/multi_tool_benchmark_architecture.md)
 - Open an issue on GitHub
 
 ---

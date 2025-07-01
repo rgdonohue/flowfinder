@@ -12,6 +12,7 @@ from typing import Optional, Tuple, Dict, Any
 import rasterio
 
 from .exceptions import DEMError
+from .optimized_algorithms import OptimizedFlowAccumulation
 
 
 class FlowAccumulationCalculator:
@@ -40,6 +41,9 @@ class FlowAccumulationCalculator:
         # Initialize flow accumulation array
         self.flow_accumulation: Optional[np.ndarray] = None
         
+        # Initialize optimized algorithm
+        self.optimized_calculator = OptimizedFlowAccumulation(self.logger)
+        
         self.logger.info("Flow accumulation calculator initialized")
     
     def calculate(self) -> np.ndarray:
@@ -58,13 +62,11 @@ class FlowAccumulationCalculator:
                 self.flow_direction_calc.calculate()
             
             flow_dir = self.flow_direction_calc.flow_direction
-            height, width = flow_dir.shape
             
-            # Initialize flow accumulation array
-            self.flow_accumulation = np.ones((height, width), dtype=np.int32)
-            
-            # Calculate flow accumulation using recursive approach
-            self._calculate_flow_accumulation_recursive(flow_dir)
+            # Use optimized algorithm instead of recursive approach
+            self.flow_accumulation = self.optimized_calculator.calculate_flow_accumulation(
+                flow_dir, nodata_value=0
+            )
             
             self.logger.info("Flow accumulation calculation completed")
             return self.flow_accumulation

@@ -120,15 +120,23 @@ def delineate_command(args) -> None:
             print(f"Delineating watershed for point: ({args.lat}, {args.lon})")
             
             # Perform watershed delineation
-            watershed = flowfinder.delineate_watershed(
+            watershed, quality_metrics = flowfinder.delineate_watershed(
                 lat=args.lat, 
                 lon=args.lon,
                 timeout=args.timeout
             )
             
-            # Calculate watershed properties
-            area_km2 = watershed.area * 111 * 111  # Rough conversion to km²
+            # Get area from quality metrics if available
+            if quality_metrics.get('topology', {}).get('area_km2'):
+                area_km2 = quality_metrics['topology']['area_km2']
+            else:
+                area_km2 = watershed.area * 111 * 111  # Fallback rough conversion
+            
             print(f"Watershed area: {area_km2:.2f} km²")
+            
+            # Print quality assessment
+            if quality_metrics.get('overall_quality'):
+                print(f"Quality assessment: {quality_metrics['overall_quality']}")
             
             # Save output
             if args.output:

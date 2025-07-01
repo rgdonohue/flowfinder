@@ -22,6 +22,10 @@ from .exceptions import (
     FlowFinderError, DEMError, WatershedError, 
     ValidationError, PerformanceError, CRSError
 )
+from .crs_handler import CRSHandler
+from .optimized_algorithms import OptimizedPolygonCreation
+from .advanced_algorithms import StreamBurning
+from .scientific_validation import PerformanceMonitor, TopologyValidator, AccuracyAssessment
 from .flow_direction import FlowDirectionCalculator
 from .flow_accumulation import FlowAccumulationCalculator
 from .watershed import WatershedExtractor
@@ -65,13 +69,33 @@ class FlowFinder:
         
         # Initialize components
         self.dem_data: Optional[rasterio.DatasetReader] = None
+        self.crs_handler: Optional[CRSHandler] = None
+        self.polygon_creator: Optional[OptimizedPolygonCreation] = None
+        self.stream_burner: Optional[StreamBurning] = None
+        self.performance_monitor: Optional[PerformanceMonitor] = None
+        self.topology_validator: Optional[TopologyValidator] = None
+        self.accuracy_assessor: Optional[AccuracyAssessment] = None
         self.flow_direction: Optional[FlowDirectionCalculator] = None
         self.flow_accumulation: Optional[FlowAccumulationCalculator] = None
         self.watershed_extractor: Optional[WatershedExtractor] = None
         
+        # Advanced algorithm components (accessed via flow_direction)
+        self.dinf_calculator = None  # Will be set via flow_direction
+        self.hydrologic_enforcer = None  # Will be set via flow_direction
+        
         # Load and validate DEM
         self._load_dem()
         self._validate_dem()
+        
+        # Initialize CRS handler
+        self._initialize_crs_handler()
+        
+        # Initialize optimized algorithms
+        self.polygon_creator = OptimizedPolygonCreation(self.logger)
+        self.stream_burner = StreamBurning(self.logger)
+        self.performance_monitor = PerformanceMonitor(self.logger)
+        self.topology_validator = TopologyValidator(self.logger)
+        self.accuracy_assessor = AccuracyAssessment(self.logger)
         
         # Initialize processing components
         self._initialize_components()
@@ -130,6 +154,25 @@ class FlowFinder:
         
         self.logger.info("DEM validation passed")
     
+    def _initialize_crs_handler(self) -> None:
+        """Initialize CRS handler for coordinate transformations."""
+        if self.dem_data is None:
+            raise ValidationError("DEM data not loaded")
+        
+        try:
+            input_crs = self.dem_data.crs
+            output_crs = self.config['output_crs']
+            
+            self.crs_handler = CRSHandler(input_crs, output_crs)
+            
+            # Validate transformation accuracy
+            self.crs_handler.validate_transformation_accuracy()
+            
+            self.logger.info("CRS handler initialized and validated")
+            
+        except Exception as e:
+            raise CRSError(f"Failed to initialize CRS handler: {e}")
+    
     def _initialize_components(self) -> None:
         """Initialize processing components."""
         if self.dem_data is None:
@@ -150,10 +193,16 @@ class FlowFinder:
             stream_threshold=self.config['stream_threshold']
         )
         
+        # Set references to advanced algorithms for validation
+        if self.flow_direction:
+            self.dinf_calculator = getattr(self.flow_direction, 'dinf_calculator', None)
+            self.hydrologic_enforcer = getattr(self.flow_direction, 'hydrologic_enforcer', None)
+        
         self.logger.info("Processing components initialized")
     
     def delineate_watershed(self, lat: float, lon: float, 
-                           timeout: Optional[float] = None) -> Polygon:
+                           timeout: Optional[float] = None,
+                           validate_topology: bool = True) -> Tuple[Polygon, Dict[str, Any]]:
         """
         Delineate watershed for a given pour point.
         
@@ -161,16 +210,20 @@ class FlowFinder:
             lat: Latitude of pour point (decimal degrees)
             lon: Longitude of pour point (decimal degrees)
             timeout: Optional timeout in seconds (overrides config)
+            validate_topology: Whether to validate topology (default: True)
             
         Returns:
-            Watershed boundary as Shapely Polygon
+            Tuple of (watershed_polygon, quality_metrics)
             
         Raises:
             ValidationError: If coordinates are invalid
             WatershedError: If watershed delineation fails
             PerformanceError: If timeout is exceeded
         """
-        start_time = time.time()
+        # Start performance monitoring
+        if self.performance_monitor:
+            self.performance_monitor.start_monitoring()
+        
         timeout = timeout or self.config['timeout_seconds']
         
         # Validate input coordinates
@@ -194,15 +247,69 @@ class FlowFinder:
             if watershed_polygon.is_empty:
                 raise WatershedError("Generated watershed is empty")
             
-            # Check performance
-            runtime = time.time() - start_time
-            if runtime > timeout:
-                raise PerformanceError(f"Watershed delineation exceeded timeout: {runtime:.1f}s")
+            # Update peak memory during processing
+            if self.performance_monitor:
+                self.performance_monitor.update_peak_memory()
             
-            self.logger.info(f"Watershed delineated in {runtime:.1f}s, "
-                           f"area: {watershed_polygon.area:.2f} km²")
+            # Validate topology if requested
+            topology_metrics = None
+            if validate_topology and self.topology_validator:
+                try:
+                    dem_bounds = self.dem_data.bounds if self.dem_data else (0, 0, 1, 1)
+                    topology_metrics = self.topology_validator.validate_watershed_topology(
+                        watershed_polygon, (lon, lat), dem_bounds
+                    )
+                    
+                    # Repair topology if needed
+                    if not topology_metrics.is_valid:
+                        self.logger.warning("Repairing watershed topology...")
+                        watershed_polygon = self.topology_validator.repair_watershed_topology(
+                            watershed_polygon
+                        )
+                except Exception as e:
+                    self.logger.warning(f"Topology validation failed: {e}")
             
-            return watershed_polygon
+            # Finish performance monitoring
+            performance_metrics = None
+            if self.performance_monitor and self.dem_data:
+                try:
+                    dem_size = self.dem_data.width * self.dem_data.height
+                    watershed_area = topology_metrics.area_km2 if topology_metrics else 0.0
+                    performance_metrics = self.performance_monitor.finish_monitoring(
+                        dem_size, watershed_area
+                    )
+                    
+                    # Check timeout after monitoring
+                    if performance_metrics.runtime_seconds > timeout:
+                        self.logger.warning(
+                            f"Watershed delineation exceeded timeout: "
+                            f"{performance_metrics.runtime_seconds:.1f}s > {timeout}s"
+                        )
+                except Exception as e:
+                    self.logger.warning(f"Performance monitoring failed: {e}")
+            
+            # Generate quality assessment
+            quality_metrics = {}
+            if self.accuracy_assessor and performance_metrics and topology_metrics:
+                try:
+                    quality_metrics = self.accuracy_assessor.assess_watershed_quality(
+                        watershed_polygon, performance_metrics, topology_metrics
+                    )
+                except Exception as e:
+                    self.logger.warning(f"Quality assessment failed: {e}")
+            
+            # Log results
+            runtime = performance_metrics.runtime_seconds if performance_metrics else 0.0
+            area = topology_metrics.area_km2 if topology_metrics else 0.0
+            
+            self.logger.info(
+                f"Watershed delineated in {runtime:.1f}s, area: {area:.2f} km²"
+            )
+            
+            if quality_metrics.get('overall_quality'):
+                self.logger.info(f"Overall quality: {quality_metrics['overall_quality']}")
+            
+            return watershed_polygon, quality_metrics
             
         except Exception as e:
             if isinstance(e, (WatershedError, PerformanceError)):
@@ -218,12 +325,17 @@ class FlowFinder:
     
     def _latlon_to_pixel(self, lat: float, lon: float) -> Tuple[int, int]:
         """Convert lat/lon coordinates to DEM pixel coordinates."""
-        if self.dem_data is None:
-            raise ValidationError("DEM data not loaded")
+        if self.dem_data is None or self.crs_handler is None:
+            raise ValidationError("DEM data or CRS handler not loaded")
         
-        # Use rasterio's transform to convert coordinates
-        row, col = self.dem_data.index(lon, lat)
-        return int(row), int(col)
+        try:
+            # Use CRS handler for robust coordinate transformation
+            row, col = self.crs_handler.get_pixel_coordinates(
+                lon, lat, self.dem_data.transform
+            )
+            return row, col
+        except Exception as e:
+            raise CRSError(f"Failed to convert lat/lon to pixel coordinates: {e}")
     
     def _point_in_bounds(self, row: int, col: int) -> bool:
         """Check if pixel coordinates are within DEM bounds."""
@@ -242,39 +354,30 @@ class FlowFinder:
         mask = np.zeros((self.dem_data.height, self.dem_data.width), dtype=np.uint8)
         mask[watershed_pixels] = 1
         
-        # Convert mask to polygon using rasterio
+        # Use optimized polygon creation
         try:
-            # Get the transform for the mask
-            transform = self.dem_data.transform
+            if self.polygon_creator is None:
+                raise ValidationError("Polygon creator not initialized")
             
-            # Find contours in the mask
-            from skimage import measure
-            contours = measure.find_contours(mask, 0.5)
+            # Convert pixels to coordinates using optimized algorithm
+            coords = self.polygon_creator.pixels_to_polygon(
+                watershed_pixels, self.dem_data.transform
+            )
             
-            if not contours:
-                return Polygon()
-            
-            # Convert contours to polygons
-            polygons = []
-            for contour in contours:
-                # Convert pixel coordinates to geographic coordinates
-                coords = []
-                for row, col in contour:
-                    lon, lat = rasterio.transform.xy(transform, row, col)
-                    coords.append((lon, lat))
+            if len(coords) >= 3:
+                polygon = Polygon(coords)
                 
-                if len(coords) >= 3:  # Need at least 3 points for a polygon
-                    polygons.append(Polygon(coords))
-            
-            # Union all polygons
-            if polygons:
-                result = unary_union(polygons)
-                return make_valid(result) if hasattr(result, 'is_valid') else result
+                # Validate and fix if needed
+                if not polygon.is_valid:
+                    self.logger.warning("Generated polygon is invalid - attempting repair")
+                    polygon = make_valid(polygon)
+                
+                return polygon
             else:
                 return Polygon()
                 
         except Exception as e:
-            self.logger.warning(f"Failed to convert pixels to polygon: {e}")
+            self.logger.warning(f"Optimized polygon creation failed: {e}")
             # Fallback: create a simple bounding box
             return self._create_fallback_polygon(watershed_pixels)
     
