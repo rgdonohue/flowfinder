@@ -43,6 +43,14 @@ import atexit
 
 import pandas as pd
 
+# Optional imports for memory monitoring
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    warnings.warn("psutil not available - memory monitoring disabled")
+
 # Optional imports for geospatial functionality
 try:
     import geopandas as gpd
@@ -108,6 +116,8 @@ class BenchmarkPipeline:
         """
         # Set up basic attributes first
         self.results_dir = Path(results_dir)
+        # Ensure results directory exists
+        self.results_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoint_file = self.results_dir / "pipeline_checkpoint.json"
         self.start_time = datetime.now()
         
@@ -300,6 +310,9 @@ class BenchmarkPipeline:
             return
         
         try:
+            # Ensure checkpoint directory exists
+            self.checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+            
             checkpoint_data = {
                 'pipeline_status': self.pipeline_status,
                 'timestamp': datetime.now().isoformat(),
@@ -660,6 +673,53 @@ class BenchmarkPipeline:
             size_bytes /= 1024.0
         return f"{size_bytes:.1f} TB"
     
+    def _get_memory_usage(self) -> Dict[str, float]:
+        """Get current memory usage information."""
+        if not PSUTIL_AVAILABLE:
+            return {'rss_mb': 0, 'vms_mb': 0, 'percent': 0, 'available_mb': 0}
+            
+        try:
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            return {
+                'rss_mb': memory_info.rss / 1024 / 1024,  # Resident Set Size
+                'vms_mb': memory_info.vms / 1024 / 1024,  # Virtual Memory Size
+                'percent': process.memory_percent(),
+                'available_mb': psutil.virtual_memory().available / 1024 / 1024
+            }
+        except Exception as e:
+            self.logger.warning(f"Failed to get memory usage: {e}")
+            return {'rss_mb': 0, 'vms_mb': 0, 'percent': 0, 'available_mb': 0}
+    
+    def _check_memory_usage(self, operation: str = "operation") -> bool:
+        """
+        Check if memory usage is within acceptable limits.
+        
+        Args:
+            operation: Description of the current operation
+            
+        Returns:
+            True if memory usage is acceptable, False if approaching limits
+        """
+        if not PSUTIL_AVAILABLE:
+            return True
+            
+        memory_info = self._get_memory_usage()
+        max_memory_mb = 4096  # Default limit for pipeline orchestrator
+        
+        if memory_info['rss_mb'] > max_memory_mb:
+            self.logger.warning(f"Memory usage ({memory_info['rss_mb']:.1f} MB) exceeds limit "
+                              f"({max_memory_mb} MB) during {operation}")
+            return False
+            
+        if memory_info['percent'] > 80:
+            self.logger.warning(f"High memory usage ({memory_info['percent']:.1f}%) during {operation}")
+            return False
+            
+        self.logger.debug(f"Memory usage during {operation}: {memory_info['rss_mb']:.1f} MB "
+                         f"({memory_info['percent']:.1f}%)")
+        return True
+    
     def _cleanup(self) -> None:
         """Perform cleanup operations."""
         self.logger.info("Performing cleanup...")
@@ -689,6 +749,11 @@ class BenchmarkPipeline:
         self.logger.info("Starting FLOWFINDER Accuracy Benchmark Pipeline")
         self.logger.info(f"Results directory: {self.results_dir}")
         
+        # Log initial memory usage
+        initial_memory = self._get_memory_usage()
+        self.logger.info(f"Initial memory usage: {initial_memory['rss_mb']:.1f} MB "
+                        f"({initial_memory['percent']:.1f}%)")
+        
         # Load checkpoint if resuming
         if resume and self._load_checkpoint():
             self.logger.info("Resuming pipeline from checkpoint")
@@ -714,6 +779,9 @@ class BenchmarkPipeline:
                 self.logger.info(f"Skipping completed stage: {stage_name}")
                 continue
             
+            # Check memory usage before stage
+            self._check_memory_usage(f"before {stage_name}")
+            
             # Check dependencies
             if not self._check_dependencies(stage_name):
                 error_msg = f"Dependencies not satisfied for {stage_name}"
@@ -730,6 +798,9 @@ class BenchmarkPipeline:
             
             # Run stage
             result = self._run_stage(stage_name)
+            
+            # Check memory usage after stage
+            self._check_memory_usage(f"after {stage_name}")
             
             # Handle stage failure
             if result['status'] != 'success':
@@ -753,6 +824,11 @@ class BenchmarkPipeline:
             self.logger.info("✓ Pipeline completed successfully")
         else:
             self.logger.warning(f"Pipeline completed with {len(self.pipeline_status['failed_stages'])} failed stages")
+        
+        # Log final memory usage
+        final_memory = self._get_memory_usage()
+        self.logger.info(f"Final memory usage: {final_memory['rss_mb']:.1f} MB "
+                        f"({final_memory['percent']:.1f}%)")
         
         # Generate summary report
         if self.config['pipeline']['generate_summary']:
