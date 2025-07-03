@@ -53,6 +53,14 @@ except ImportError:
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore', category=UserWarning, module='geopandas')
 warnings.filterwarnings('ignore', category=FutureWarning, module='pandas')
+warnings.filterwarnings('ignore', category=DeprecationWarning, module='pyogrio')
+warnings.filterwarnings('ignore', category=DeprecationWarning, module='pyproj')
+warnings.filterwarnings(
+    'ignore', category=DeprecationWarning, message='.*shapely.geos.*'
+)
+warnings.filterwarnings(
+    'ignore', category=DeprecationWarning, message='.*CRS.*unsafe.*'
+)
 
 
 class TruthExtractor:

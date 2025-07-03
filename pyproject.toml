@@ -126,6 +126,14 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+filterwarnings = [
+    "ignore::DeprecationWarning:pyogrio.*",
+    "ignore::DeprecationWarning:pyproj.*",
+    "ignore::DeprecationWarning:pandas.*",
+    "ignore:.*shapely.geos.*:DeprecationWarning",
+    "ignore:.*CRS.*unsafe.*:DeprecationWarning",
+    "ignore:.*ndim.*scalar.*:DeprecationWarning"
+]
 
 [tool.coverage.run]
 source = ["scripts"]
