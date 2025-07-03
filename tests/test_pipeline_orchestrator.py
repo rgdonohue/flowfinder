@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 import sys
 import os
+import subprocess
+from datetime import datetime
 from unittest.mock import Mock, patch, MagicMock
 
 # Add project root to path
@@ -85,14 +87,14 @@ class TestBenchmarkPipeline:
         pipeline = BenchmarkPipeline(results_dir=temp_dir)
         
         # Create mock output files
-        (temp_dir / "basin_sample.csv").touch()
-        (temp_dir / "basin_sample.gpkg").touch()
+        (Path(temp_dir) / "basin_sample.csv").touch()
+        (Path(temp_dir) / "basin_sample.gpkg").touch()
         
         # Test output checking
         assert pipeline._check_outputs('basin_sampling') == True
         
         # Remove one file
-        (temp_dir / "basin_sample.gpkg").unlink()
+        (Path(temp_dir) / "basin_sample.gpkg").unlink()
         assert pipeline._check_outputs('basin_sampling') == False
     
     @patch('subprocess.run')
@@ -108,8 +110,8 @@ class TestBenchmarkPipeline:
         pipeline = BenchmarkPipeline(results_dir=temp_dir)
         
         # Create mock output files
-        (temp_dir / "basin_sample.csv").touch()
-        (temp_dir / "basin_sample.gpkg").touch()
+        (Path(temp_dir) / "basin_sample.csv").touch()
+        (Path(temp_dir) / "basin_sample.gpkg").touch()
         
         # Test stage execution
         result = pipeline._run_stage('basin_sampling')
@@ -183,8 +185,8 @@ class TestBenchmarkPipeline:
         }
         
         # Create mock output files
-        (temp_dir / "basin_sample.csv").touch()
-        (temp_dir / "test_file.txt").touch()
+        (Path(temp_dir) / "basin_sample.csv").touch()
+        (Path(temp_dir) / "test_file.txt").touch()
         
         # Generate summary
         summary_file = pipeline._generate_summary_report()
@@ -196,7 +198,7 @@ class TestBenchmarkPipeline:
         with open(summary_file, 'r') as f:
             content = f.read()
             assert 'Pipeline Summary' in content
-            assert 'basin_sampling' in content
+            assert 'Basin Sampling' in content  # Display name, not internal key
             assert '45.2s' in content
     
     def test_duration_calculation(self, temp_dir):
@@ -205,7 +207,7 @@ class TestBenchmarkPipeline:
         
         # Test short duration
         pipeline.pipeline_status['start_time'] = '2023-01-01T10:00:00'
-        with patch('datetime.datetime') as mock_datetime:
+        with patch('run_benchmark.datetime') as mock_datetime:
             mock_datetime.now.return_value = datetime(2023, 1, 1, 10, 0, 30)
             mock_datetime.fromisoformat.return_value = datetime(2023, 1, 1, 10, 0, 0)
             
@@ -257,7 +259,7 @@ class TestPipelineIntegration:
         """Test pipeline with mock data and dependencies"""
         # Create mock data structure
         data_dir = Path(temp_dir) / "data"
-        data_dir.mkdir()
+        data_dir.mkdir(exist_ok=True)
         
         # Create required data files
         (data_dir / "huc12.shp").touch()
@@ -292,7 +294,7 @@ class TestPipelineIntegration:
             }
         }
         
-        config_file = temp_dir / "test_config.yaml"
+        config_file = Path(temp_dir) / "test_config.yaml"
         with open(config_file, 'w') as f:
             yaml.dump(config, f)
         
