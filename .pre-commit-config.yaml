@@ -1,0 +1,60 @@
+# Pre-commit hooks configuration for FLOWFINDER
+# Aligns with GitHub Actions CI workflow (.github/workflows/ci.yml)
+
+repos:
+  # Code formatting
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        args: [--exclude, "scripts/benchmark_runner_backup.py"]
+        files: ^(scripts/|tests/|flowfinder/).*\.py$
+
+  # Linting
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.1.0
+    hooks:
+      - id: flake8
+        args: [--exclude, "scripts/benchmark_runner_backup.py", --exit-zero]
+        files: ^(scripts/|tests/|flowfinder/).*\.py$
+
+  # Type checking
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.1
+    hooks:
+      - id: mypy
+        args: [--ignore-missing-imports]
+        files: ^(scripts/|flowfinder/).*\.py$
+        additional_dependencies: [types-PyYAML, types-requests]
+
+  # Security scanning
+  - repo: https://github.com/pycqa/bandit
+    rev: 1.7.9
+    hooks:
+      - id: bandit
+        args: [-r, ., -f, json, -o, bandit-report.json, --skip, B101]
+        files: ^(scripts/|flowfinder/).*\.py$
+
+  # Basic file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+
+# Configuration
+default_language_version:
+  python: python3.11
+
+# Skip hooks that should only run in CI or are too strict for development
+ci:
+  skip: [mypy, bandit]
+
+# Speed up development - only run essential hooks locally
+default_stages: [pre-commit]
+minimum_pre_commit_version: 2.15.0

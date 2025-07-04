@@ -48,13 +48,13 @@ git clone <repository-url>
 cd flowfinder
 
 # Install dependencies
-pip install -r requirements.txt
+pip install -e .[dev]
 
 # Install FLOWFINDER
 pip install flowfinder
 
-# Copy environment template
-cp .env.example .env
+# Copy environment template (if it exists)
+cp .env.example .env || echo "Create .env file with your data paths"
 # Edit .env with your data paths and configuration
 ```
 
@@ -63,12 +63,11 @@ cp .env.example .env
 The system uses a hierarchical configuration architecture to manage complexity:
 
 ```bash
-# Create configuration structure
-mkdir -p config/{base,environments,tools,experiments,schemas}
+# Configuration structure is already set up:
 
 # Environment-specific configurations
 config/environments/development.yaml    # Local dev (10 basins)
-config/environments/testing.yaml        # CI/testing (50 basins)  
+config/environments/testing.yaml        # CI/testing (50 basins)
 config/environments/production.yaml     # Full-scale (500+ basins)
 
 # Tool-specific configurations
@@ -110,11 +109,9 @@ python scripts/benchmark_runner.py \
 ### 5. Run Multi-Tool Comparison (Experimental)
 
 ```bash
-# Using the new configuration system
-python scripts/benchmark_runner_integrated.py \
-    --environment development \
-    --tools flowfinder,taudem \
-    --experiment accuracy_comparison \
+# Using the watershed experiment runner
+python scripts/watershed_experiment_runner.py \
+    --single --lat 40.0 --lon -105.5 --name "test_run" \
     --outdir results/multi_tool/
 ```
 
@@ -130,23 +127,23 @@ python scripts/benchmark_runner_integrated.py \
 ├── config/                     # Hierarchical configuration system
 │   ├── base.yaml              # Foundation configurations
 │   ├── configuration_manager.py # Configuration inheritance system
+│   ├── schema.json            # JSON Schema validation
 │   ├── environments/           # Environment-specific settings
 │   │   ├── development.yaml   # Local development (10 basins)
 │   │   ├── testing.yaml       # CI/testing (50 basins)
 │   │   └── production.yaml    # Full-scale (500+ basins)
-│   ├── tools/                  # Tool-specific configurations
-│   │   ├── flowfinder.yaml    # FLOWFINDER settings
-│   │   ├── taudem.yaml        # TauDEM MPI settings
-│   │   ├── grass.yaml         # GRASS r.watershed settings
-│   │   └── whitebox.yaml      # WhiteboxTools settings
-│   └── schemas/               # JSON Schema validation
+│   └── tools/                  # Tool-specific configurations
+│       ├── flowfinder.yaml    # FLOWFINDER settings
+│       ├── taudem.yaml        # TauDEM MPI settings
+│       ├── grass.yaml         # GRASS r.watershed settings
+│       └── whitebox.yaml      # WhiteboxTools settings
 │
 ├── scripts/                    # Core benchmark scripts
 │   ├── basin_sampler.py       # Stratified basin sampling
 │   ├── truth_extractor.py     # Truth polygon extraction
 │   ├── benchmark_runner.py    # FLOWFINDER accuracy testing
-│   ├── benchmark_runner_integrated.py # Multi-tool comparison
-│   └── tool_adapters/         # Tool adapter implementations
+│   ├── watershed_experiment_runner.py # Multi-tool comparison
+│   └── validation_tools.py    # Validation utilities
 │
 ├── data/                       # Input datasets (gitignored)
 ├── results/                    # Output directory (gitignored)
@@ -197,7 +194,7 @@ class ToolAdapter(ABC):
     def delineate_watershed(self, pour_point: Point, dem_path: str) -> Tuple[Polygon, Dict]:
         """Delineate watershed and return polygon + performance metrics"""
         pass
-    
+
     @abstractmethod
     def is_available(self) -> bool:
         """Check if tool is available on system"""
@@ -331,4 +328,4 @@ For research questions and technical issues:
 
 *"Research is formalized curiosity. It is poking and prying with a purpose."*
 
-**FLOWFINDER: Exploring watershed delineation accuracy and developing systematic comparison methods for hydrological research.** 
+**FLOWFINDER: Exploring watershed delineation accuracy and developing systematic comparison methods for hydrological research.**

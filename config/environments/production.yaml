@@ -1,9 +1,9 @@
 benchmark:
   output_formats:
-  - json
-  - csv
-  - summary
-  - errors
+    json: true
+    csv: true
+    summary: true
+    errors: true
   timeout_seconds: 300
 logging:
   level: WARNING

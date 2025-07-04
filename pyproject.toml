@@ -71,7 +71,7 @@ Issues = "https://github.com/flowfinder/benchmark/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["scripts*", "config*"]
+include = ["scripts*", "config*", "flowfinder*"]
 
 [tool.black]
 line-length = 88
@@ -122,7 +122,7 @@ strict_equality = true
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra -q --strict-markers"
-testpaths = ["tests"]
+testpaths = ["tests", "flowfinder"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -155,4 +155,4 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
-] 
+]

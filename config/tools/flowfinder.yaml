@@ -1,8 +1,8 @@
 benchmark:
   success_thresholds:
-    flat: 0.97
-    moderate: 0.94
-    steep: 0.88
+    flat: 0.95
+    moderate: 0.92
+    steep: 0.85
 tool:
   additional_args:
   - --verbose

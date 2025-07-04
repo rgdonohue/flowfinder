@@ -5,9 +5,9 @@ benchmark:
     iou: true
     runtime: true
   output_formats:
-  - json
-  - csv
-  - summary
+    json: true
+    csv: true
+    summary: true
   success_thresholds:
     default: 0.9
     flat: 0.95

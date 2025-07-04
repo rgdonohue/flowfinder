@@ -24,9 +24,4 @@ __license__ = "MIT"
 from .core import FlowFinder
 from .exceptions import FlowFinderError, DEMError, WatershedError
 
-__all__ = [
-    "FlowFinder",
-    "FlowFinderError", 
-    "DEMError",
-    "WatershedError"
-] 
+__all__ = ["FlowFinder", "FlowFinderError", "DEMError", "WatershedError"]
