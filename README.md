@@ -143,19 +143,21 @@ python scripts/watershed_experiment_runner.py \
 │   ├── truth_extractor.py     # Truth polygon extraction
 │   ├── benchmark_runner.py    # FLOWFINDER accuracy testing
 │   ├── watershed_experiment_runner.py # Multi-tool comparison
-│   └── validation_tools.py    # Validation utilities
+│   ├── validation_tools.py    # Validation utilities
+│   └── backup/                # Deprecated scripts and files
 │
 ├── data/                       # Input datasets (gitignored)
+│   └── test_outputs/          # Test result files
 ├── results/                    # Output directory (gitignored)
-├── tests/                      # Unit tests
+├── tests/                      # Unit and integration tests
+│   └── integration/           # Integration test suite
 ├── docs/                       # Research and technical documentation
-│   ├── strategic_analysis_implementation_roadmap_v2.md # Research roadmap
-│   ├── multi_tool_integration_strategy.md # Integration approach
-│   ├── strategic_analysis_assessment.md # Research evaluation
-│   ├── immediate_next_steps.md # Implementation priorities
-│   ├── configuration_architecture.md # Configuration system design
-│   ├── multi_tool_benchmark_architecture.md # Framework design
-│   └── test_coverage/          # Test coverage documentation
+│   ├── README.md              # Documentation index
+│   ├── PIPELINE.md            # Pipeline orchestrator guide
+│   ├── user_guide/            # User documentation and guides
+│   ├── architecture/          # System architecture documentation
+│   ├── test_coverage/         # Test coverage documentation
+│   └── development/           # Development notes and status reports
 │
 └── notebooks/                  # Jupyter exploration
     └── benchmark_analysis.ipynb
@@ -247,11 +249,14 @@ class ToolAdapter(ABC):
 # Run unit tests
 python -m pytest tests/
 
+# Run integration tests
+python -m pytest tests/integration/
+
 # Test configuration system
-python test_configuration_system.py
+python tests/integration/test_configuration_system.py
 
 # Test multi-tool integration
-python test_integration.py
+python tests/integration/test_integration.py
 
 # Run with coverage
 python -m pytest tests/ --cov=scripts --cov-report=html
@@ -284,16 +289,19 @@ jupyter lab notebooks/
 
 ## 📚 Documentation
 
-### Research Documents
-- **[Research Roadmap](docs/strategic_analysis_implementation_roadmap_v2.md)**: Implementation plan with research milestones
-- **[Multi-Tool Integration Strategy](docs/multi_tool_integration_strategy.md)**: Research-based tool integration approach
-- **[Research Assessment](docs/strategic_analysis_assessment.md)**: Comprehensive research evaluation
-- **[Next Steps](docs/immediate_next_steps.md)**: Implementation priorities
+📖 **[Complete Documentation](docs/README.md)** - Full documentation index
 
-### Technical Documents
-- **[Configuration Architecture](docs/configuration_architecture.md)**: Hierarchical configuration system design
-- **[Multi-Tool Benchmark Architecture](docs/multi_tool_benchmark_architecture.md)**: Framework design and implementation
-- **[Test Coverage](docs/test_coverage/)**: Comprehensive testing documentation
+### Quick Links
+- **[Setup Guide](docs/user_guide/setup.md)** - Installation and environment setup
+- **[Pipeline Guide](docs/PIPELINE.md)** - Running benchmarks and workflows
+- **[Data Specification](docs/user_guide/data_specification.md)** - Data sources and requirements
+- **[Configuration Examples](docs/user_guide/configuration_examples.md)** - Configuration system usage
+
+### Technical Documentation
+- **[Architecture Overview](docs/architecture/)** - System design and architecture
+- **[Configuration Architecture](docs/architecture/configuration_architecture.md)** - Hierarchical configuration system
+- **[Multi-Tool Framework](docs/architecture/multi_tool_benchmark_architecture.md)** - Multi-tool comparison framework
+- **[Test Coverage](docs/test_coverage/)** - Comprehensive testing documentation
 
 ## 🤝 Contributing
 
