@@ -302,8 +302,7 @@ class BenchmarkRunner:
 
             self.logger.debug(f"Coordinate validation passed for {source_description} in {ranges['name']}")
             return True
-
-    except Exception as e:
+        except Exception as e:
             self.logger.error(f"Coordinate range validation failed for {source_description}: {e}")
             return False
 

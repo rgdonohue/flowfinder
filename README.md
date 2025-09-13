@@ -1,42 +1,55 @@
-# FLOWFINDER: Watershed Delineation Research & Benchmark Framework
+# FLOWFINDER: Python Watershed Delineation Tool
 
-A research project exploring watershed delineation accuracy and developing systematic comparison methods for hydrological analysis tools. This work addresses key challenges in watershed delineation: reliability validation, systematic benchmarking, and geographic specialization for complex terrain.
+A Python implementation of watershed delineation algorithms with benchmarking infrastructure. FLOWFINDER provides reliable watershed boundary extraction from Digital Elevation Models (DEMs) using standard hydrological algorithms, along with performance monitoring and validation tools.
+
+**Current Status:** Core watershed delineation functionality is complete and tested. Multi-tool benchmarking and research framework components are in development.
 
 ![flow finder](images/flowfinder.png)
 
-## 🎯 Research Questions
+## 🎯 Project Goals
 
-**What problems are we trying to solve?**
+**What does FLOWFINDER currently provide?**
 
-1. **Reliability Gap**: How can we systematically validate watershed delineation tools across diverse terrain types?
-2. **Benchmarking Gap**: Why is there no standardized framework for comparing watershed delineation tools?
-3. **Geographic Bias**: How do existing tools perform in Mountain West terrain compared to other regions?
-4. **Reproducibility Crisis**: How can we ensure watershed delineation results are reproducible and comparable?
+1. **Reliable Watershed Delineation**: Fast, accurate watershed boundary extraction from DEM data
+2. **Performance Monitoring**: Built-in timing, memory usage, and accuracy tracking
+3. **Validation Tools**: Topology checking and quality assessment for generated watersheds
+4. **Python & CLI Access**: Both programmatic API and command-line interface
 
-**Our approach**: Develop FLOWFINDER as both a research tool and benchmark framework to systematically investigate these questions.
+**Future Development Goals:**
+- Multi-tool comparison framework (TauDEM, GRASS, WhiteboxTools integration)
+- Systematic benchmarking across different terrain types  
+- Research-grade validation studies
+- Geographic specialization optimization
 
-## 🔬 Research Context
+## 🔬 Technical Background
 
-### Current State of Watershed Delineation
-- **Tool proliferation**: Multiple tools (TauDEM, GRASS, WhiteboxTools) with different algorithms
-- **Validation challenges**: Limited systematic comparison of accuracy and performance
-- **Geographic bias**: Most studies focus on eastern US or international basins
-- **Reproducibility issues**: Ad-hoc validation methods make results hard to compare
+### Core Implementation
+FLOWFINDER implements standard hydrological algorithms using modern Python scientific libraries:
 
-### Research Gaps We're Addressing
-- **Systematic benchmarking**: No standardized framework for multi-tool comparison
-- **Mountain West terrain**: Limited research on complex terrain performance
-- **Reliability metrics**: Need for consistent validation across tools
-- **Open methodology**: Reproducible research practices for watershed analysis
+- **Flow Direction**: D8 algorithm with priority-flood depression filling
+- **Flow Accumulation**: Topological sorting (Kahn's algorithm) for O(n) performance  
+- **Watershed Extraction**: Upstream tracing from pour points
+- **Polygon Creation**: Morphological operations with boundary tracing
+
+### Validation & Quality Assurance
+- Real-time performance monitoring (runtime, memory usage)
+- Topology validation (geometry validity, containment checks)
+- Accuracy assessment tools (when ground truth available)
+- Comprehensive error handling and logging
 
 ## 📋 Prerequisites
 
+### Required
 - Python 3.8+
-- FLOWFINDER CLI tool installed and accessible
-- Access to USGS NHD+ HR data and 3DEP 10m DEM data
-- 8GB+ RAM recommended for processing large datasets
-- Docker (for TauDEM integration)
-- GRASS GIS (for r.watershed comparison)
+- DEM data in GeoTIFF format
+- 4GB+ RAM recommended for processing large datasets
+
+### Optional (for development/benchmarking)
+- Additional watershed tools for comparison:
+  - TauDEM (requires Docker)
+  - GRASS GIS
+  - WhiteboxTools
+- Ground truth watershed boundaries for validation
 
 ## 🚀 Quick Start
 
@@ -89,30 +102,41 @@ data/
 └── dem_10m.tif               # 10m DEM mosaic or tiles
 ```
 
-### 4. Run Single-Tool Benchmark
+### 4. Basic Usage
 
-```bash
-# Step 1: Generate stratified basin sample
-python scripts/basin_sampler.py --config config/basin_sampler_config.yaml
+#### Python API
+```python
+from flowfinder import FlowFinder
 
-# Step 2: Extract truth polygons
-python scripts/truth_extractor.py --config config/truth_extractor_config.yaml
-
-# Step 3: Run FLOWFINDER benchmark
-python scripts/benchmark_runner.py \
-    --sample basin_sample.csv \
-    --truth truth_polygons.gpkg \
-    --config config/benchmark_config.yaml \
-    --outdir results/
+# Initialize with DEM
+with FlowFinder("path/to/dem.tif") as ff:
+    # Delineate watershed from a pour point
+    watershed, metrics = ff.delineate_watershed(lat=40.0, lon=-105.0)
+    print(f"Watershed area: {watershed.area:.6f} degrees²")
 ```
 
-### 5. Run Multi-Tool Comparison (Experimental)
+#### Command Line Interface
+```bash
+# Delineate watershed
+python -m flowfinder.cli delineate --dem dem.tif --lat 40.0 --lon -105.0 --output watershed.geojson
+
+# Validate DEM
+python -m flowfinder.cli validate --dem dem.tif
+
+# Get DEM info
+python -m flowfinder.cli info --dem dem.tif
+```
+
+### 5. Benchmarking (Experimental)
+
+⚠️ **Note**: Multi-tool comparison features are currently in development. Some components may use mock data for testing infrastructure.
 
 ```bash
-# Using the watershed experiment runner
-python scripts/watershed_experiment_runner.py \
-    --single --lat 40.0 --lon -105.5 --name "test_run" \
-    --outdir results/multi_tool/
+# Run basic benchmark with FLOWFINDER
+python scripts/benchmark_runner.py \
+    --environment development \
+    --tools flowfinder \
+    --outdir results/
 ```
 
 ## 📁 Project Structure
@@ -203,45 +227,42 @@ class ToolAdapter(ABC):
         pass
 ```
 
-## 📊 Research Outputs
+## 📊 Outputs
 
-### Single-Tool Benchmark
-- `benchmark_results.json`: Detailed per-basin metrics
+### FLOWFINDER Results
+- **Watershed Polygons**: GeoJSON or Shapefile format
+- **Performance Metrics**: Runtime, memory usage, processing rate
+- **Quality Assessment**: Topology validation, accuracy scores
+- **Detailed Logs**: Complete processing history and diagnostics
+
+### Benchmarking Outputs (When Available)
+- `benchmark_results.json`: Detailed per-watershed metrics
 - `accuracy_summary.csv`: Tabular results for analysis
-- `benchmark_summary.txt`: Performance analysis and key findings
-
-### Multi-Tool Comparison (Experimental)
-- `multi_tool_results.json`: Comparative analysis across tools
 - `performance_comparison.csv`: Runtime and memory comparisons
-- `statistical_analysis.csv`: ANOVA, Tukey HSD, Kruskal-Wallis results
-- `publication_figures/`: Research-ready charts and graphs
 
-## 🎯 Research Metrics
+⚠️ **Note**: Multi-tool comparison outputs are generated using mock data when external tools are not available.
 
-### Technical Validation
-| Metric                    | Current Target                    | Status |
+## 🎯 Current Performance
+
+### Core FLOWFINDER Capabilities
+| Feature                   | Status                           | Notes |
 | ------------------------- | --------------------------------- | ------ |
-| FLOWFINDER IOU (mean)     | ≥ 0.90                           | 🔄 In Progress |
-| FLOWFINDER IOU (90th percentile) | ≥ 0.95                       | 🔄 In Progress |
-| Runtime (mean)            | ≤ 30 s                           | 🔄 In Progress |
-| Configuration redundancy  | 90% reduction                    | ✅ Achieved |
-| Tool integration success  | 4 major tools integrated         | 🔄 In Progress |
+| Basic watershed delineation | ✅ Implemented                 | Tested and working |
+| D8 flow direction         | ✅ Implemented                   | With depression filling |
+| Flow accumulation         | ✅ Implemented                   | O(n) topological sorting |
+| Performance monitoring    | ✅ Implemented                   | Runtime, memory tracking |
+| Python API               | ✅ Implemented                   | Full functionality |
+| CLI interface            | ✅ Implemented                   | Basic commands available |
+| Topology validation      | ✅ Implemented                   | Geometry checking |
 
-### Research Impact Goals
-| Metric                    | Target                           | Status |
+### Development Roadmap
+| Feature                   | Timeline                         | Status |
 | ------------------------- | --------------------------------- | ------ |
-| Peer-reviewed publications | 2+ papers submitted              | 🔄 In Progress |
-| Conference presentations  | 5+ presentations                 | 🔄 In Progress |
-| Citations (2 years)       | 100+ citations                   | 🔄 In Progress |
-| Framework adoption        | 3+ external research groups      | 🔄 In Progress |
-
-### Community Engagement Goals
-| Metric                    | Target                           | Status |
-| ------------------------- | --------------------------------- | ------ |
-| GitHub stars              | 500+ stars                       | 🔄 In Progress |
-| FLOWFINDER downloads      | 1000+ downloads                  | 🔄 In Progress |
-| External contributors     | 10+ contributors                 | 🔄 In Progress |
-| Institutional adoptions   | 5+ adoptions                     | 🔄 In Progress |
+| Multi-tool integration    | Future release                   | 📋 Planned |
+| Batch processing         | Next minor version               | 🔄 In Development |
+| Advanced algorithms      | Future release                   | 📋 Planned |
+| Performance optimization | Ongoing                          | 🔄 Continuous |
+| Documentation improvements | Next patch                     | 🔄 In Progress |
 
 ## 🧪 Testing
 
@@ -273,19 +294,26 @@ jupyter lab notebooks/
 # Open benchmark_analysis.ipynb for interactive exploration
 ```
 
-## 🎯 Research Roadmap
+## 🎯 Development Roadmap
 
-### Phase 1: Foundation - IN PROGRESS
-- ✅ **Configuration Architecture**: Hierarchical system implemented
-- ✅ **FLOWFINDER Development**: Core tool with validation framework
-- 🔄 **Benchmark Framework MVP**: Multi-tool comparison development
-- 🔄 **Literature Review**: Research gap analysis and methodology development
+### Current Release (v0.1.0) - COMPLETED
+- ✅ **Core Algorithm Implementation**: D8 flow direction, flow accumulation, watershed extraction
+- ✅ **Python API**: Complete programmatic interface
+- ✅ **Basic CLI**: Command-line watershed delineation
+- ✅ **Performance Monitoring**: Runtime and memory tracking
+- ✅ **Validation Tools**: Topology checking and quality assessment
 
-### Phase 2: Tool Integration - PLANNED
-- 🔄 **WhiteboxTools Integration**: Rust-based performance comparison
-- 🔄 **TauDEM Integration**: Academic gold standard validation
-- 🔄 **GRASS GIS Integration**: Comprehensive hydrological suite
-- 🔄 **SAGA GIS Integration**: European academic adoption
+### Next Minor Release (v0.2.0) - PLANNED
+- 📋 **Batch Processing**: Process multiple pour points efficiently  
+- 📋 **Output Formats**: Additional export options (KML, WKT)
+- 📋 **Configuration Improvements**: Better parameter management
+- 📋 **Documentation**: Comprehensive user guide and API reference
+
+### Future Development - UNDER CONSIDERATION
+- 📋 **Multi-tool Integration**: TauDEM, GRASS, WhiteboxTools comparison (requires external tool installation)
+- 📋 **Advanced Algorithms**: D-infinity, multiple flow direction methods
+- 📋 **Performance Optimization**: Parallel processing, memory optimization
+- 📋 **Research Framework**: Systematic validation studies (academic collaboration needed)
 
 ## 📚 Documentation
 
@@ -334,6 +362,4 @@ For research questions and technical issues:
 
 ---
 
-*"Research is formalized curiosity. It is poking and prying with a purpose."*
-
-**FLOWFINDER: Exploring watershed delineation accuracy and developing systematic comparison methods for hydrological research.**
+**FLOWFINDER: Reliable Python watershed delineation with performance monitoring and validation tools.**

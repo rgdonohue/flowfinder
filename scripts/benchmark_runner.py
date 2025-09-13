@@ -1,27 +1,30 @@
 #!/usr/bin/env python3
 """
-FLOWFINDER Accuracy Benchmark Runner
-====================================
+FLOWFINDER Benchmark Runner
+============================
 
-This module runs the FLOWFINDER delineation pipeline over a stratified sample of basins
-and measures spatial accuracy and performance metrics for watershed delineation.
+This module runs watershed delineation benchmarks using FLOWFINDER and computes
+performance metrics. Currently supports single-tool benchmarking with FLOWFINDER.
 
-The benchmark runner executes FLOWFINDER delineations, computes accuracy metrics (IOU,
-boundary ratio, centroid offset), and generates comprehensive performance reports
-with terrain-specific analysis for the Mountain West region.
+IMPORTANT: Multi-tool comparison features are in development. When external tools
+(TauDEM, GRASS, WhiteboxTools) are not available, the system generates mock results
+for testing the benchmarking infrastructure.
 
-Key Features:
-- FLOWFINDER CLI integration with timeout handling
+Current Features:
+- FLOWFINDER watershed delineation benchmarking
+- Performance metrics (runtime, memory, accuracy when ground truth available)
 - Spatial accuracy metrics (IOU, boundary ratio, centroid offset)
-- Terrain-specific performance thresholds
-- Comprehensive error handling and logging
-- Progress tracking and status updates
-- Performance analysis and reporting
+- Progress tracking and comprehensive logging
 - Export to multiple formats (JSON, CSV, summary)
 
-Author: FLOWFINDER Benchmark Team
+Future Features:
+- Real multi-tool comparison (requires external tool installation)
+- Systematic validation studies
+- Terrain-specific analysis
+
+Author: FLOWFINDER Team
 License: MIT
-Version: 1.0.0
+Version: 0.1.0
 """
 
 import argparse

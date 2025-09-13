@@ -1,16 +1,19 @@
 """
-FLOWFINDER - Watershed Delineation Tool
-======================================
+FLOWFINDER - Python Watershed Delineation Tool
+===============================================
 
-A high-performance watershed delineation tool that takes lat/lon coordinates
-and returns watershed boundaries with high spatial accuracy.
+A Python implementation of watershed delineation algorithms using standard 
+hydrological methods. Extracts watershed boundaries from Digital Elevation 
+Models (DEMs) with performance monitoring and validation tools.
 
 Key Features:
-- Fast watershed delineation (<30s target)
-- High spatial accuracy (95% IOU target)
-- Command-line interface
-- Python API
-- Support for 10m DEM data
+- D8 flow direction with priority-flood depression filling
+- O(n) flow accumulation using topological sorting
+- Watershed extraction from pour points (lat/lon coordinates)
+- Real-time performance monitoring (runtime, memory usage)
+- Topology validation and quality assessment
+- Python API and command-line interface
+- Support for GeoTIFF DEM data
 
 Author: FLOWFINDER Team
 License: MIT

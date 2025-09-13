@@ -5,15 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "flowfinder-benchmark"
 version = "0.1.0"
-description = "Accuracy benchmark system for FLOWFINDER watershed delineation tool"
+description = "Python watershed delineation tool with performance monitoring and benchmarking infrastructure"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
     {name = "FLOWFINDER Team", email = "team@flowfinder.com"}
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
@@ -22,6 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Topic :: Scientific/Engineering :: GIS",
     "Topic :: Scientific/Engineering :: Hydrology",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 requires-python = ">=3.8"
 dependencies = [

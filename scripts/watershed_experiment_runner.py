@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
 """
-Real Watershed Delineation Experiment Runner
-==========================================
+Multi-Tool Watershed Delineation Experiment Runner (EXPERIMENTAL)
+================================================================
 
-This script demonstrates a complete multi-tool watershed delineation experiment
-using the hierarchical configuration system and standardized result format.
+IMPORTANT - CURRENT STATUS: This is experimental infrastructure for multi-tool watershed
+comparison. Most functionality currently uses MOCK DATA for development and testing.
 
-Features:
-- Real watershed delineation experiments with multiple tools
-- Comprehensive performance and accuracy comparison
-- Research-grade result documentation
-- Statistical analysis of tool performance
-- Visualization-ready output formats
+Real tool integration status:
+- FLOWFINDER: ✅ Fully functional  
+- TauDEM: ❌ Mock results only (requires Docker + TauDEM installation)
+- GRASS GIS: ❌ Mock results only (requires GRASS installation)  
+- WhiteboxTools: ❌ Mock results only (requires WhiteboxTools installation)
 
-Author: FLOWFINDER Multi-Tool Team
+This framework generates realistic mock results when external tools are unavailable,
+allowing development and testing of the comparison infrastructure.
+
+Features Currently Working:
+- FLOWFINDER watershed delineation 
+- Performance monitoring and logging
+- Standardized result format
+- Mock multi-tool comparison (for infrastructure testing)
+
+Author: FLOWFINDER Team
 License: MIT
-Version: 1.0.0
+Version: 0.1.0 (Experimental)
 """
 
 import argparse
