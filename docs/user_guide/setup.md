@@ -1,7 +1,7 @@
 # FLOWFINDER Setup and Testing Instructions
 *Complete guide for virtual environment setup and system validation*
 
-## 🚀 Phase 1: Environment Setup (You'll do this)
+## 🚀 Phase 1: Environment Setup
 
 ```bash
 # Create and activate virtual environment
@@ -9,16 +9,14 @@ python -m venv flowfinder_env
 source flowfinder_env/bin/activate  # On macOS/Linux
 # or: flowfinder_env\Scripts\activate  # On Windows
 
-# Install required packages
-pip install geopandas shapely pandas pytest rasterio PyYAML jsonschema
-pip install numpy scipy scikit-image tqdm matplotlib seaborn
-
-# Install FLOWFINDER package in development mode
-pip install -e .
+# Install FLOWFINDER and development dependencies
+pip install -e .[dev]
 
 # Verify installation
-python -m flowfinder --help
+flowfinder --help
 ```
+
+This is the only supported local setup path for development in this repository.
 
 ## 🧪 Phase 2: System Validation Tests (After venv setup)
 
@@ -158,7 +156,7 @@ python scripts/watershed_experiment_runner.py --single --lat 40.0 --lon -105.5 -
 ### Issue: "No module named 'flowfinder'"
 ```bash
 # Solution: Reinstall in development mode
-pip install -e .
+pip install -e .[dev]
 ```
 
 ### Issue: "Cannot import 'shapely'"

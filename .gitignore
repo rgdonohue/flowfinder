@@ -219,6 +219,7 @@ outputs/
 *.json
 *.log
 *.txt
+!requirements.txt
 
 # Temporary files
 temp/
