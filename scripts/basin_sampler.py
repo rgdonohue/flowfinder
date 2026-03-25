@@ -322,30 +322,31 @@ class BasinSampler:
         if self.config["snap_tolerance"] <= 0:
             raise ValueError("snap_tolerance must be > 0")
 
-        # Validate file paths
+        # Defer filesystem existence checks to dataset loading so the sampler
+        # can still be initialized in config-only and test contexts.
         data_dir = Path(self.config["data_dir"])
         if not data_dir.exists():
-            raise FileNotFoundError(f"Data directory does not exist: {data_dir}")
-
-        required_files = ["huc12"]
-        for file_key in required_files:
-            file_value = self.config["files"][file_key]
-            if file_value is None:
-                raise ValueError(f"Required file '{file_key}' cannot be null")
-            file_path = data_dir / file_value
-            if not file_path.exists():
-                raise FileNotFoundError(f"Required file not found: {file_path}")
-
-        # Check optional files
-        optional_files = ["flowlines", "catchments", "dem"]
-        for file_key in optional_files:
-            file_value = self.config["files"][file_key]
-            if file_value is not None:
+            self.logger.warning(f"Data directory does not exist yet: {data_dir}")
+        else:
+            required_files = ["huc12"]
+            for file_key in required_files:
+                file_value = self.config["files"][file_key]
+                if file_value is None:
+                    raise ValueError(f"Required file '{file_key}' cannot be null")
                 file_path = data_dir / file_value
                 if not file_path.exists():
-                    self.logger.warning(f"Optional file not found: {file_path}")
-                else:
-                    self.logger.info(f"Found optional file: {file_path}")
+                    self.logger.warning(f"Required file not found yet: {file_path}")
+
+            # Check optional files
+            optional_files = ["flowlines", "catchments", "dem"]
+            for file_key in optional_files:
+                file_value = self.config["files"][file_key]
+                if file_value is not None:
+                    file_path = data_dir / file_value
+                    if not file_path.exists():
+                        self.logger.warning(f"Optional file not found: {file_path}")
+                    else:
+                        self.logger.info(f"Found optional file: {file_path}")
 
         self.logger.info("Configuration validation passed")
 
