@@ -91,7 +91,7 @@ jobs:
         bandit -r scripts/ flowfinder/ -f json -o bandit-report.json || true
 
     - name: Upload bandit report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: bandit-report
         path: bandit-report.json
@@ -119,7 +119,7 @@ jobs:
         twine check dist/*
 
     - name: Upload package artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: package-dist
         path: dist/
