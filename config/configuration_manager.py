@@ -312,8 +312,14 @@ class ConfigurationManager:
                     "properties": {
                         "timeout_seconds": {"type": "number", "minimum": 1},
                         "output_formats": {
-                            "type": "array",
-                            "items": {"type": "string", "enum": ["json", "csv", "summary", "errors"]}
+                            "type": "object",
+                            "properties": {
+                                "json": {"type": "boolean"},
+                                "csv": {"type": "boolean"},
+                                "summary": {"type": "boolean"},
+                                "errors": {"type": "boolean"}
+                            },
+                            "additionalProperties": False
                         },
                         "metrics": {
                             "type": "object",

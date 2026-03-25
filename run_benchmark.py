@@ -264,10 +264,11 @@ class BenchmarkPipeline:
         if pipeline_config['max_retries'] < 0:
             raise ValueError("max_retries must be non-negative")
         
-        # Validate data directory
+        # Defer missing input-data handling to stage dependency checks so the
+        # pipeline object can still be initialized in dry-run and test contexts.
         data_dir = Path(pipeline_config['data_dir'])
         if not data_dir.exists():
-            raise FileNotFoundError(f"Data directory does not exist: {data_dir}")
+            self.logger.warning(f"Data directory does not exist yet: {data_dir}")
         
         # Validate stage configurations
         for stage_name, stage_config in self.config['stages'].items():
